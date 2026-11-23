@@ -560,7 +560,7 @@ export class CosmicEnvironment {
   ): void {
     const entryReveal = hasEntered ? 1 : 0.22;
 
-    const firstLight = smoothstep(1.8, 7.5, filmTime);
+    const firstLight = smoothstep(0.3, 5.0, filmTime);
     const expansion = smoothstep(9.0, 42.0, filmTime);
     const starsWake = hasEntered ? smoothstep(7.0, 22.0, filmTime) : 0.38;
 
@@ -605,9 +605,15 @@ export class CosmicEnvironment {
       (mat.uniforms.uLightDir.value as THREE.Vector2).set(lx, ly);
     }
 
+    // Chapter V is a night sky seen from Earth: no anchor-star 'sun' and no galaxy clutter beside the Moon
+    const quietHours = smoothstep(286.5, 292.5, filmTime) * (1 - smoothstep(333.5, 338.5, filmTime));
+
     for (let i = 0; i < this.galaxies.length; i++) {
       const g = this.galaxies[i];
       g.rotation.y += delta * (g.userData.spinRate as number);
+      if (quietHours > 0) {
+        (g.material as THREE.ShaderMaterial).uniforms.uOpacity.value *= 1 - quietHours;
+      }
     }
 
     // Update Prologue Geodesic Raymarched Singularity & Curl-Noise Big Bang
@@ -617,7 +623,7 @@ export class CosmicEnvironment {
       const idleBreath = !hasEntered ? 0.36 + 0.08 * Math.sin(elapsed * 0.9) : 0;
       // Keep central sprite very subtle when geodesic black hole horizon is visible
       const diskEnvelope = hasEntered
-        ? smoothstep(2.0, 9.5, filmTime) * (1 - smoothstep(28.0, 44.0, filmTime))
+        ? smoothstep(0.8, 7.0, filmTime) * (1 - smoothstep(28.0, 44.0, filmTime))
         : 0.45;
       const coreOp = hasEntered
         ? firstLight * prologueFadeOut * (1 - expansion * 0.72) * (1 - diskEnvelope * 0.75) * 0.48
@@ -634,7 +640,7 @@ export class CosmicEnvironment {
 
       this.singularitySphere.visible = diskEnvelope > 0.01;
       if (this.singularitySphere.visible) {
-        const radiusScale = hasEntered ? 0.58 + smoothstep(2.0, 18.0, filmTime) * 0.56 : 0.72;
+        const radiusScale = hasEntered ? 0.58 + smoothstep(1.0, 18.0, filmTime) * 0.56 : 0.72;
         this.singularityGeodesicMat.uniforms.uTime.value = elapsed;
         this.singularityGeodesicMat.uniforms.uOpacity.value = diskEnvelope * 0.96;
         this.singularityGeodesicMat.uniforms.uHorizonRadius.value = 1.85 * radiusScale;
@@ -659,7 +665,8 @@ export class CosmicEnvironment {
     this.guidingCore.scale.set(s, s, 1);
     this.guidingHalo.scale.set(s * 2.7, s * 2.7, 1);
 
-    const starVis = hasEntered ? smoothstep(5.5, 11.0, filmTime) : 0;
+    // From Chapter IV on, each scene supplies its own focal star (cluster eyes, the house lamp, the dying star)
+    const starVis = (hasEntered ? smoothstep(5.5, 11.0, filmTime) : 0) * (1 - quietHours) * (1 - smoothstep(226.0, 231.0, filmTime));
     this.guidingCore.material.opacity = starVis * 0.85;
     this.guidingHalo.material.opacity = starVis * 0.34;
     this.guidingLight.intensity = starVis * 1.25;

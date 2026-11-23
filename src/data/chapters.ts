@@ -19,13 +19,16 @@ export interface ChapterDefinition {
   fogDensity: number;
   accentHex: string;
   ambientTone: 'void' | 'earth' | 'constellation' | 'gravity' | 'yinyang' | 'quiet' | 'revelation';
+  /** Deliberate [min, max] inter-cue visual/musical pause window in seconds */
+  pauseRangeSec?: readonly [number, number];
 }
 
 export const FILM_DURATION = 405; // 06:45
 export const SILENCE_START = 365; // Hard orchestral silence before reveal
 export const SILENCE_END = 370.5;
-export const TITLE_REVEAL_TIME = 371.5; // First moment "ISHA" appears
-export const BIRTHDAY_REVEAL_TIME = 379; // "25 NOVEMBER" & "Happy Birthday, Isha."
+export const TITLE_REVEAL_TIME = 371.5; // First moment "ISHA" & "Happy Birthday, Isha." appear
+export const BIRTHDAY_REVEAL_TIME = 371.5; // Appears immediately at 371.5s with ISHA reveal
+export const ORBITAL_CODA_TIME = 378.8; // Warm orbital statistics coda: 24 orbits · 22.5B km
 export const SHOOTING_STAR_TIME = 387; // Subtle golden shooting star
 export const POSTSCRIPT_REVEAL_TIME = 391; // Playful universe postscript
 
@@ -55,6 +58,7 @@ export const CHAPTERS: ChapterDefinition[] = [
     fogDensity: 0.0028,
     accentHex: '#f1b963',
     ambientTone: 'earth',
+    pauseRangeSec: [2.0, 4.0],
   },
   {
     id: 'chapter-2',
@@ -94,6 +98,7 @@ export const CHAPTERS: ChapterDefinition[] = [
     fogDensity: 0.003,
     accentHex: '#d9c4f2',
     ambientTone: 'yinyang',
+    pauseRangeSec: [2.0, 4.0],
   },
   {
     id: 'chapter-5',
@@ -107,6 +112,7 @@ export const CHAPTERS: ChapterDefinition[] = [
     fogDensity: 0.0048,
     accentHex: '#f0c584',
     ambientTone: 'quiet',
+    pauseRangeSec: [2.0, 4.0],
   },
   {
     id: 'final-chapter',
@@ -130,6 +136,7 @@ export type RevealStage =
   | 'burst'
   | 'title'
   | 'birthday'
+  | 'coda'
   | 'postscript';
 
 export function clamp(value: number, min: number, max: number): number {
@@ -145,11 +152,18 @@ export function smoothstep(edge0: number, edge1: number, x: number): number {
 export function getChapterAtTime(timeSec: number): ChapterDefinition {
   const clamped = clamp(timeSec, 0, FILM_DURATION);
   for (let i = CHAPTERS.length - 1; i >= 0; i--) {
-    if (clamped >= CHAPTERS[i].start) {
-      return CHAPTERS[i];
+    const ch = CHAPTERS[i];
+    if (ch && clamped >= ch.start) {
+      return ch;
     }
   }
-  return CHAPTERS[0];
+  return CHAPTERS[0]!;
+}
+
+export function getChapterPauseRange(
+  chapterId: ChapterId,
+): readonly [number, number] | undefined {
+  return CHAPTERS.find((ch) => ch.id === chapterId)?.pauseRangeSec;
 }
 
 export function getChapterProgress(timeSec: number, chapter: ChapterDefinition): number {
@@ -183,7 +197,8 @@ export function getRevealStage(timeSec: number): RevealStage {
   if (timeSec < SILENCE_END) return 'silence';
   if (timeSec < TITLE_REVEAL_TIME) return 'burst';
   if (timeSec < BIRTHDAY_REVEAL_TIME) return 'title';
-  if (timeSec < POSTSCRIPT_REVEAL_TIME) return 'birthday';
+  if (timeSec < ORBITAL_CODA_TIME) return 'birthday';
+  if (timeSec < POSTSCRIPT_REVEAL_TIME) return 'coda';
   return 'postscript';
 }
 

@@ -157,27 +157,35 @@ export class GpgpuCosmicFluid {
   public readonly root = new THREE.Group();
   public readonly particleCount: number;
 
-  private readonly isSoftwareGl: boolean;
+  private readonly canRunGpuSim: boolean;
   private readonly simSize: number;
-  private readonly simScene: THREE.Scene;
-  private readonly simCamera: THREE.OrthographicCamera;
-  private readonly simMat: THREE.ShaderMaterial;
-  private readonly simMesh: THREE.Mesh;
-  private readonly homeTex: THREE.DataTexture;
-  private readonly rtA: THREE.WebGLRenderTarget;
-  private readonly rtB: THREE.WebGLRenderTarget;
-  private readonly renderMat: THREE.ShaderMaterial;
-  private readonly points: THREE.Points;
+  private readonly simScene: THREE.Scene | null = null;
+  private readonly simCamera: THREE.OrthographicCamera | null = null;
+  private readonly simMat: THREE.ShaderMaterial | null = null;
+  private readonly simMesh: THREE.Mesh | null = null;
+  private readonly homeTex: THREE.DataTexture | null = null;
+  private readonly rtA: THREE.WebGLRenderTarget | null = null;
+  private readonly rtB: THREE.WebGLRenderTarget | null = null;
+  private readonly renderMat: THREE.ShaderMaterial | null = null;
+  private readonly points: THREE.Points | null = null;
   private readonly disposables: Array<{ dispose: () => void }> = [];
 
   private useAAsSource = true;
   private initialized = false;
   private activeAnchorZ = 0;
+  private qualityEnabled = true;
 
-  constructor(isMobile: boolean, isSoftwareGl: boolean, pixelRatio: number) {
-    this.isSoftwareGl = isSoftwareGl;
-    // 320x320 = 102,400 GPU-simulated particles on desktop GPU; 192x192 on mobile
-    this.simSize = isSoftwareGl ? 64 : isMobile ? 192 : 320;
+  constructor(isMobile: boolean, canRunGpuSim: boolean, pixelRatio: number) {
+    this.canRunGpuSim = canRunGpuSim;
+    if (!canRunGpuSim) {
+      this.simSize = 0;
+      this.particleCount = 0;
+      this.root.visible = false;
+      return;
+    }
+
+    // 320x320 = 102,400 GPU-simulated particles on desktop GPU; 160x160 on mobile
+    this.simSize = isMobile ? 160 : 320;
     this.particleCount = this.simSize * this.simSize;
 
     // Seed initial particle home distribution on a unit/spherical manifold
@@ -224,7 +232,7 @@ export class GpgpuCosmicFluid {
         dummyPos[i * 3 + 2] = pz;
 
         scales[i] = 1.0 + Math.pow(rand(), 2.2) * 2.2;
-        const c = palette[Math.floor(rand() * palette.length)];
+        const c = palette[Math.floor(rand() * palette.length)]!;
         colors[i * 3] = c.r;
         colors[i * 3 + 1] = c.g;
         colors[i * 3 + 2] = c.b;
@@ -319,12 +327,24 @@ export class GpgpuCosmicFluid {
     pointerNdc: THREE.Vector2,
     audioBass: number,
   ): void {
-    // Active during Prologue Big Bang (0..54), Chapter IV Yin-Yang (222..286), and Final Convergence/Reveal (334..405)
+    if (
+      !this.canRunGpuSim ||
+      !this.qualityEnabled ||
+      !this.simScene ||
+      !this.simCamera ||
+      !this.simMat ||
+      !this.renderMat ||
+      !this.homeTex ||
+      !this.rtA ||
+      !this.rtB
+    ) {
+      this.root.visible = false;
+      return;
+    }
+
     const prologueW = hasEntered
       ? smoothstep(6.0, 14.0, filmTime) * (1 - smoothstep(42.0, 56.0, filmTime))
       : 0.25;
-    const yinYangW =
-      smoothstep(222.0, 232.0, filmTime) * (1 - smoothstep(278.0, 287.0, filmTime));
     const silenceDip =
       smoothstep(SILENCE_START - 1.5, SILENCE_START + 0.3, filmTime) *
       (1 - smoothstep(SILENCE_END, SILENCE_END + 1.8, filmTime));
@@ -335,24 +355,19 @@ export class GpgpuCosmicFluid {
     let anchorZ = 0;
     let opacity = 0;
 
-    if (finalW >= yinYangW && finalW >= prologueW && finalW > 0.01) {
+    if (finalW >= prologueW && finalW > 0.01) {
       mode = 2;
       progress = clamp((filmTime - 335) / 50, 0, 1);
       anchorZ = -515;
-      opacity = finalW * 0.42;
-    } else if (yinYangW >= prologueW && yinYangW > 0.01) {
-      mode = 1;
-      progress = clamp((filmTime - 225) / 60, 0, 1);
-      anchorZ = -340;
-      opacity = yinYangW * 0.38;
+      opacity = finalW * 0.38;
     } else if (prologueW > 0.01) {
       mode = 0;
       progress = smoothstep(8.0, 44.0, filmTime);
       anchorZ = 0;
-      opacity = prologueW * 0.44;
+      opacity = prologueW * 0.4;
     }
 
-    this.root.visible = opacity > 0.008 && !this.isSoftwareGl;
+    this.root.visible = opacity > 0.008;
     if (!this.root.visible) return;
 
     if (Math.abs(anchorZ - this.activeAnchorZ) > 50) {
@@ -369,30 +384,43 @@ export class GpgpuCosmicFluid {
       : this.homeTex;
     const dstRT = this.useAAsSource ? this.rtB : this.rtA;
 
-    this.simMat.uniforms.tPositions.value = srcTex;
-    this.simMat.uniforms.uTime.value = elapsed;
-    this.simMat.uniforms.uDelta.value = delta;
-    this.simMat.uniforms.uMode.value = mode;
-    this.simMat.uniforms.uProgress.value = progress;
-    (this.simMat.uniforms.uCursorWorld.value as THREE.Vector3).set(
+    this.simMat.uniforms.tPositions!.value = srcTex;
+    this.simMat.uniforms.uTime!.value = elapsed;
+    this.simMat.uniforms.uDelta!.value = delta;
+    this.simMat.uniforms.uMode!.value = mode;
+    this.simMat.uniforms.uProgress!.value = progress;
+    (this.simMat.uniforms.uCursorWorld!.value as THREE.Vector3).set(
       pointerNdc.x * 16.0,
       pointerNdc.y * 10.0,
       0,
     );
-    this.simMat.uniforms.uCursorActive.value = pointerNdc.length() > 0.02 ? 1.0 : 0.0;
-    this.simMat.uniforms.uAudioBass.value = clamp(audioBass, 0, 1);
+    this.simMat.uniforms.uCursorActive!.value = pointerNdc.length() > 0.02 ? 1.0 : 0.0;
+    this.simMat.uniforms.uAudioBass!.value = clamp(audioBass, 0, 1);
 
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(dstRT);
     renderer.render(this.simScene, this.simCamera);
     renderer.setRenderTarget(prevRT);
 
-    this.renderMat.uniforms.tPositions.value = dstRT.texture;
-    this.renderMat.uniforms.uOpacity.value = opacity;
-    this.renderMat.uniforms.uAudioBass.value = clamp(audioBass, 0, 1);
+    this.renderMat.uniforms.tPositions!.value = dstRT.texture;
+    this.renderMat.uniforms.uOpacity!.value = opacity;
+    this.renderMat.uniforms.uAudioBass!.value = clamp(audioBass, 0, 1);
 
     this.useAAsSource = !this.useAAsSource;
     this.initialized = true;
+  }
+
+  public setEnabled(enabled: boolean): void {
+    this.qualityEnabled = enabled;
+    if (!enabled) {
+      this.root.visible = false;
+    }
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    if (this.renderMat?.uniforms.uPixelRatio) {
+      this.renderMat.uniforms.uPixelRatio.value = pixelRatio;
+    }
   }
 
   public dispose(): void {

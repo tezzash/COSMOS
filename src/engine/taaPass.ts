@@ -187,28 +187,38 @@ export class TaaResolvePass extends Pass {
   }
 
   public setVelocityTexture(tex: THREE.Texture | null): void {
-    this.resolveMat.uniforms.tVelocity.value = tex;
-    this.resolveMat.uniforms.uHasVelocity.value = tex ? 1.0 : 0.0;
+    if (this.resolveMat.uniforms.tVelocity) {
+      this.resolveMat.uniforms.tVelocity.value = tex;
+    }
+    if (this.resolveMat.uniforms.uHasVelocity) {
+      this.resolveMat.uniforms.uHasVelocity.value = tex ? 1.0 : 0.0;
+    }
   }
 
   public setBlendFactor(blend: number): void {
-    this.resolveMat.uniforms.uBlendFactor.value = this.historyValid ? blend : 0.0;
+    if (this.resolveMat.uniforms.uBlendFactor) {
+      this.resolveMat.uniforms.uBlendFactor.value = this.historyValid ? blend : 0.0;
+    }
   }
 
   public getBlendFactor(): number {
-    return this.resolveMat.uniforms.uBlendFactor.value as number;
+    return (this.resolveMat.uniforms.uBlendFactor?.value as number | undefined) ?? 0;
   }
 
   public resetHistory(): void {
     this.historyValid = false;
-    this.resolveMat.uniforms.uBlendFactor.value = 0.0;
+    if (this.resolveMat.uniforms.uBlendFactor) {
+      this.resolveMat.uniforms.uBlendFactor.value = 0.0;
+    }
   }
 
   public override setSize(width: number, height: number): void {
     const safeW = Math.max(1, Math.floor(width));
     const safeH = Math.max(1, Math.floor(height));
     this.historyRT.setSize(safeW, safeH);
-    (this.resolveMat.uniforms.uTexelSize.value as THREE.Vector2).set(1 / safeW, 1 / safeH);
+    if (this.resolveMat.uniforms.uTexelSize) {
+      (this.resolveMat.uniforms.uTexelSize.value as THREE.Vector2).set(1 / safeW, 1 / safeH);
+    }
     this.resetHistory();
   }
 
@@ -217,9 +227,13 @@ export class TaaResolvePass extends Pass {
     writeBuffer: THREE.WebGLRenderTarget,
     readBuffer: THREE.WebGLRenderTarget,
   ): void {
-    this.resolveMat.uniforms.tDiffuse.value = readBuffer.texture;
-    this.resolveMat.uniforms.tHistory.value = this.historyRT.texture;
-    if (!this.historyValid) {
+    if (this.resolveMat.uniforms.tDiffuse) {
+      this.resolveMat.uniforms.tDiffuse.value = readBuffer.texture;
+    }
+    if (this.resolveMat.uniforms.tHistory) {
+      this.resolveMat.uniforms.tHistory.value = this.historyRT.texture;
+    }
+    if (!this.historyValid && this.resolveMat.uniforms.uBlendFactor) {
       this.resolveMat.uniforms.uBlendFactor.value = 0.0;
     }
 
@@ -229,7 +243,9 @@ export class TaaResolvePass extends Pass {
 
     // 2. Store resolved output into historyRT for the next frame
     if (!this.renderToScreen) {
-      this.copyMat.uniforms.tDiffuse.value = writeBuffer.texture;
+      if (this.copyMat.uniforms.tDiffuse) {
+        this.copyMat.uniforms.tDiffuse.value = writeBuffer.texture;
+      }
       renderer.setRenderTarget(this.historyRT);
       this.copyQuad.render(renderer);
       this.historyValid = true;

@@ -100,9 +100,11 @@ export class ConstellationNetwork {
     this.nodePositions = new Float32Array(count * 3);
     this.nodeColors = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
-      this.nodePositions[i * 3] = this.nodes[i].pos.x;
-      this.nodePositions[i * 3 + 1] = this.nodes[i].pos.y;
-      this.nodePositions[i * 3 + 2] = this.nodes[i].pos.z;
+      const node = this.nodes[i];
+      if (!node) continue;
+      this.nodePositions[i * 3] = node.pos.x;
+      this.nodePositions[i * 3 + 1] = node.pos.y;
+      this.nodePositions[i * 3 + 2] = node.pos.z;
     }
 
     this.nodeGeometry = new THREE.BufferGeometry();
@@ -198,6 +200,7 @@ export class ConstellationNetwork {
   private spawnShockwave(localPoint: THREE.Vector3): void {
     const sw = this.touchShockwaves[this.nextShockwaveIdx];
     this.nextShockwaveIdx = (this.nextShockwaveIdx + 1) % this.touchShockwaves.length;
+    if (!sw) return;
     sw.active = true;
     sw.age = 0;
     sw.mesh.position.copy(localPoint);
@@ -211,10 +214,14 @@ export class ConstellationNetwork {
     const max = Math.max(aIdx, bIdx);
     const key = `${min}-${max}`;
     if (this.connectionSet.has(key)) return;
+
+    const nodeA = this.nodes[min];
+    const nodeB = this.nodes[max];
+    if (!nodeA || !nodeB) return;
     this.connectionSet.add(key);
 
-    const a = this.nodes[min].pos;
-    const b = this.nodes[max].pos;
+    const a = nodeA.pos;
+    const b = nodeB.pos;
 
     // Sculpt a graceful outward gravitational arc (quadratic Bézier control point)
     _mid.addVectors(a, b).multiplyScalar(0.5);
@@ -277,21 +284,31 @@ export class ConstellationNetwork {
 
     this.connectionCount += 1;
     this.lineGeometry.setDrawRange(0, this.connectionCount * SEGMENTS_PER_EDGE * 2);
-    this.lineGeometry.attributes.position.needsUpdate = true;
-    this.lineGeometry.attributes.aColor.needsUpdate = true;
-    this.lineGeometry.attributes.aProgress.needsUpdate = true;
-    this.lineGeometry.attributes.aPhase.needsUpdate = true;
+    if (this.lineGeometry.attributes.position) {
+      this.lineGeometry.attributes.position.needsUpdate = true;
+    }
+    if (this.lineGeometry.attributes.aColor) {
+      this.lineGeometry.attributes.aColor.needsUpdate = true;
+    }
+    if (this.lineGeometry.attributes.aProgress) {
+      this.lineGeometry.attributes.aProgress.needsUpdate = true;
+    }
+    if (this.lineGeometry.attributes.aPhase) {
+      this.lineGeometry.attributes.aPhase.needsUpdate = true;
+    }
   }
 
   private igniteAroundPoint(localPoint: THREE.Vector3, radius: number): number {
     this.spawnShockwave(localPoint);
     const activatedIndices: number[] = [];
     for (let i = 0; i < this.nodes.length; i++) {
-      const d = this.nodes[i].pos.distanceTo(localPoint);
+      const node = this.nodes[i];
+      if (!node) continue;
+      const d = node.pos.distanceTo(localPoint);
       if (d <= radius) {
         const boost = 1 - d / radius;
-        this.nodes[i].activated = Math.max(
-          this.nodes[i].activated,
+        node.activated = Math.max(
+          node.activated,
           clamp(0.68 + boost * 0.32, 0, 1),
         );
         activatedIndices.push(i);
@@ -299,18 +316,21 @@ export class ConstellationNetwork {
     }
 
     // Connect newly illuminated stars + trigger subtle secondary chain-reaction hops
-    for (let i = 0; i < activatedIndices.length; i++) {
-      const idxA = activatedIndices[i];
+    for (const idxA of activatedIndices) {
+      const nodeA = this.nodes[idxA];
+      if (!nodeA) continue;
       let linked = 0;
       for (let j = 0; j < this.nodes.length && linked < 3; j++) {
         if (j === idxA) continue;
-        const dist = this.nodes[idxA].pos.distanceTo(this.nodes[j].pos);
-        if (dist < 8.0 && this.nodes[j].activated >= 0.32) {
+        const nodeJ = this.nodes[j];
+        if (!nodeJ) continue;
+        const dist = nodeA.pos.distanceTo(nodeJ.pos);
+        if (dist < 8.0 && nodeJ.activated >= 0.32) {
           this.addConnection(idxA, j);
           linked++;
-        } else if (dist < 6.2 && this.nodes[j].activated < 0.32 && linked < 2) {
+        } else if (dist < 6.2 && nodeJ.activated < 0.32 && linked < 2) {
           // Cascading chain-reaction light wave into neighboring dormant star
-          this.nodes[j].activated = 0.52;
+          nodeJ.activated = 0.52;
           this.addConnection(idxA, j);
           linked++;
         }
@@ -340,7 +360,7 @@ export class ConstellationNetwork {
   public triggerAccessiblePulse(): number {
     const unlit = this.nodes.filter((n) => n.activated < 0.5);
     const seed =
-      unlit.length > 0 ? unlit[Math.floor(unlit.length * 0.35)].pos : new THREE.Vector3(0, 0, 0);
+      unlit[Math.floor(unlit.length * 0.35)]?.pos ?? new THREE.Vector3(0, 0, 0);
     return this.igniteAroundPoint(seed, 11.5);
   }
 
@@ -357,14 +377,16 @@ export class ConstellationNetwork {
 
     for (let i = 0; i < this.nodes.length; i++) {
       const node = this.nodes[i];
+      if (!node) continue;
       if (node.distFromCenter <= waveRadius && node.activated < 0.9) {
         node.activated = Math.min(1, node.activated + 0.06);
         if (node.activated > 0.55) {
           let nearest = -1;
           let bestDist = 7.6;
           for (let j = 0; j < this.nodes.length; j++) {
-            if (j === i || this.nodes[j].activated < 0.5) continue;
-            const d = node.pos.distanceTo(this.nodes[j].pos);
+            const nodeJ = this.nodes[j];
+            if (j === i || !nodeJ || nodeJ.activated < 0.5) continue;
+            const d = node.pos.distanceTo(nodeJ.pos);
             if (d < bestDist) {
               bestDist = d;
               nearest = j;
@@ -383,26 +405,32 @@ export class ConstellationNetwork {
       this.nodeColors[i * 3 + 2] = THREE.MathUtils.lerp(0.68, 0.56, a) * shimmer;
     }
 
-    this.nodeGeometry.attributes.color.needsUpdate = true;
+    if (this.nodeGeometry.attributes.color) {
+      this.nodeGeometry.attributes.color.needsUpdate = true;
+    }
     this.nodeMaterial.opacity = 0.84 * weight;
-    this.lineMaterial.uniforms.uTime.value = elapsed;
-    this.lineMaterial.uniforms.uOpacity.value = 0.64 * weight;
+    if (this.lineMaterial.uniforms.uTime) {
+      this.lineMaterial.uniforms.uTime.value = elapsed;
+    }
+    if (this.lineMaterial.uniforms.uOpacity) {
+      this.lineMaterial.uniforms.uOpacity.value = 0.64 * weight;
+    }
 
     this.root.rotation.y = (filmTime - 175) * 0.018;
 
     // Ambient expanding central ripple rings
     for (let i = 0; i < this.rippleRings.length; i++) {
+      const ring = this.rippleRings[i];
+      if (!ring) continue;
       const cycle = (elapsed * 0.24 + i / this.rippleRings.length) % 1;
       const scale = 1.0 + cycle * 28.0;
-      const ring = this.rippleRings[i];
       ring.scale.setScalar(scale);
       (ring.material as THREE.MeshBasicMaterial).opacity =
         Math.sin(cycle * Math.PI) * 0.28 * weight * smoothstep(175, 182, filmTime);
     }
 
     // Interactive touch shockwave ripples
-    for (let i = 0; i < this.touchShockwaves.length; i++) {
-      const sw = this.touchShockwaves[i];
+    for (const sw of this.touchShockwaves) {
       if (!sw.active) continue;
       sw.age += dt;
       const life = sw.age / 1.45;

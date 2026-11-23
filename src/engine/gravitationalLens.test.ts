@@ -1,4 +1,4 @@
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { CHAPTERS } from '../data/chapters';
 import { computeChapterTransitionLens } from './gravitationalLens';
@@ -11,7 +11,9 @@ test('Gravitational Lens peaks cleanly at every chapter boundary and rests at ze
   assert.equal(midCh3.strength, 0);
 
   for (let i = 1; i < CHAPTERS.length; i++) {
-    const boundary = CHAPTERS[i].start;
+    const chapter = CHAPTERS[i];
+    assert.ok(chapter);
+    const boundary = chapter.start;
     const atSeam = computeChapterTransitionLens(boundary);
     const beforeSeam = computeChapterTransitionLens(boundary - 2.0);
     const afterSeam = computeChapterTransitionLens(boundary + 2.0);

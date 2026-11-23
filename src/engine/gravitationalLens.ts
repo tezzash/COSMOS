@@ -41,7 +41,9 @@ export function computeChapterTransitionLens(
 
   // Chapter boundaries are CHAPTERS[1..6].start (55, 110, 175, 225, 285, 335)
   for (let i = 1; i < CHAPTERS.length; i++) {
-    const boundary = CHAPTERS[i].start;
+    const chapter = CHAPTERS[i];
+    if (!chapter) continue;
+    const boundary = chapter.start;
     const diff = t - boundary;
     const absDiff = Math.abs(diff);
     if (absDiff < LENS_TRANSITION_HALF_WINDOW) {

@@ -92,7 +92,8 @@ export const GLSL_PLANETARY_ECLIPSE = /* glsl */ `
     float shadowAmt = 1.0 - sunFactor;
     float edgeT = clamp((perpDist - umbraRadius) / max(0.001, penumbraRadius - umbraRadius), 0.0, 1.0);
     float copperRim = sin(edgeT * 3.14159265) * step(perpDist, penumbraRadius);
-    float earthshine = shadowAmt / (1.0 + pow(distBehind / max(1.0, occluderRadius * 2.4), 2.0));
+    float distRatio = distBehind / max(1.0, occluderRadius * 2.4);
+    float earthshine = shadowAmt / (1.0 + distRatio * distRatio);
     return vec3(sunFactor, copperRim, clamp(earthshine, 0.0, 1.0));
   }
 `;

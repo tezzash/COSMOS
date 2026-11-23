@@ -191,9 +191,15 @@ export class VelocityBufferRenderer {
     }
 
     _currInvViewProj.copy(_currViewProj).invert();
-    (this.skyVelMat.uniforms.uCurrInvViewProj.value as THREE.Matrix4).copy(_currInvViewProj);
-    (this.skyVelMat.uniforms.uPrevViewProj.value as THREE.Matrix4).copy(this.prevViewProj);
-    (this.velocityMat.uniforms.uPrevViewProj.value as THREE.Matrix4).copy(this.prevViewProj);
+    if (this.skyVelMat.uniforms.uCurrInvViewProj) {
+      (this.skyVelMat.uniforms.uCurrInvViewProj.value as THREE.Matrix4).copy(_currInvViewProj);
+    }
+    if (this.skyVelMat.uniforms.uPrevViewProj) {
+      (this.skyVelMat.uniforms.uPrevViewProj.value as THREE.Matrix4).copy(this.prevViewProj);
+    }
+    if (this.velocityMat.uniforms.uPrevViewProj) {
+      (this.velocityMat.uniforms.uPrevViewProj.value as THREE.Matrix4).copy(this.prevViewProj);
+    }
 
     const prevRT = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
@@ -238,11 +244,13 @@ export class VelocityBufferRenderer {
         const prevHandler = obj.onBeforeRender;
         savedHandlers.push({ mesh: obj, prevHandler });
         obj.onBeforeRender = () => {
+          const prevUniform = this.velocityMat.uniforms.uPrevModelMatrix;
+          if (!prevUniform) return;
           const pm = this.prevModelMap.get(obj);
           if (pm) {
-            (this.velocityMat.uniforms.uPrevModelMatrix.value as THREE.Matrix4).copy(pm);
+            (prevUniform.value as THREE.Matrix4).copy(pm);
           } else {
-            (this.velocityMat.uniforms.uPrevModelMatrix.value as THREE.Matrix4).copy(obj.matrixWorld);
+            (prevUniform.value as THREE.Matrix4).copy(obj.matrixWorld);
           }
         };
       }
@@ -257,14 +265,13 @@ export class VelocityBufferRenderer {
     scene.background = prevBg;
 
     // Restore visibility & handlers, then snapshot current matrices as next frame's previous state
-    for (let i = 0; i < savedHandlers.length; i++) {
-      savedHandlers[i].mesh.onBeforeRender = savedHandlers[i].prevHandler;
+    for (const item of savedHandlers) {
+      item.mesh.onBeforeRender = item.prevHandler;
     }
-    for (let i = 0; i < savedVis.length; i++) {
-      savedVis[i].obj.visible = savedVis[i].vis;
+    for (const item of savedVis) {
+      item.obj.visible = item.vis;
     }
-    for (let i = 0; i < this.trackedMeshes.length; i++) {
-      const mesh = this.trackedMeshes[i];
+    for (const mesh of this.trackedMeshes) {
       const pm = this.prevModelMap.get(mesh);
       if (pm) pm.copy(mesh.matrixWorld);
     }
@@ -308,7 +315,9 @@ export class ShutterMotionBlurPass extends Pass {
   }
 
   public setShutterScale(scale: number): void {
-    this.mat.uniforms.uShutterScale.value = scale;
+    if (this.mat.uniforms.uShutterScale) {
+      this.mat.uniforms.uShutterScale.value = scale;
+    }
   }
 
   public override render(
@@ -316,7 +325,9 @@ export class ShutterMotionBlurPass extends Pass {
     writeBuffer: THREE.WebGLRenderTarget,
     readBuffer: THREE.WebGLRenderTarget,
   ): void {
-    this.mat.uniforms.tDiffuse.value = readBuffer.texture;
+    if (this.mat.uniforms.tDiffuse) {
+      this.mat.uniforms.tDiffuse.value = readBuffer.texture;
+    }
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }

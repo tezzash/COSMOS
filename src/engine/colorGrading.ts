@@ -1,4 +1,4 @@
-import { SILENCE_END, SILENCE_START, clamp, smoothstep } from '../data/chapters';
+import { SILENCE_END, clamp, smoothstep } from '../data/chapters';
 
 export type FilmLutId = 'cosmosCool' | 'etherealViolet' | 'kodak2383Warm';
 

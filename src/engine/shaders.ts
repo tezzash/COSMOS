@@ -90,7 +90,7 @@ export const STARFIELD_FRAGMENT_SHADER = /* glsl */ `
 
     // Crisp pinpoint blackbody astronomical core with tight, restrained halo
     float core = exp(-d * d * 96.0);
-    float halo = pow(max(0.0, 1.0 - d * 2.0), 4.4) * 0.20;
+    float halo = pow(max(0.0001, 1.0 - d * 2.0), 4.4) * 0.20;
 
     // Delicate 4-point telescope diffraction spikes strictly on top magnitude-1 stars
     float spikeX = exp(-abs(uv.y) * 68.0) * exp(-abs(uv.x) * 7.2);
@@ -187,7 +187,8 @@ export const NEAR_DEBRIS_FRAGMENT_SHADER = /* glsl */ `
 
     // Authentic restrained optical bokeh disc: subtle glowing interior + fine outer rim
     float disc = smoothstep(1.0, mix(0.18, 0.72, vBokehSoftness), r);
-    float bokehRim = exp(-pow((r - 0.78) * 6.5, 2.0)) * 0.22 * vBokehSoftness;
+    float rimDelta = (r - 0.78) * 6.5;
+    float bokehRim = exp(-(rimDelta * rimDelta)) * 0.22 * vBokehSoftness;
     float crispCore = exp(-circ * circ * 12.0) * (1.0 - vBokehSoftness * 0.75);
     float intensity = disc * 0.34 + bokehRim + crispCore * 0.48;
 
@@ -334,12 +335,13 @@ export const GOD_RAYS_FRAGMENT_SHADER = /* glsl */ `
     if (r > 1.0) discard;
 
     float angle = atan(p.y, p.x);
-    float rayA = pow(0.5 + 0.5 * sin(angle * 9.0 + uTime * 0.16), 2.8);
-    float rayB = pow(0.5 + 0.5 * cos(angle * 15.0 - uTime * 0.11 + 1.2), 3.4);
-    float rayC = pow(0.5 + 0.5 * sin(angle * 5.0 + uTime * 0.07), 2.0);
+    float rayA = pow(max(0.0001, 0.5 + 0.5 * sin(angle * 9.0 + uTime * 0.16)), 2.8);
+    float rayB = pow(max(0.0001, 0.5 + 0.5 * cos(angle * 15.0 - uTime * 0.11 + 1.2)), 3.4);
+    float rayCBase = max(0.0, 0.5 + 0.5 * sin(angle * 5.0 + uTime * 0.07));
+    float rayC = rayCBase * rayCBase;
     float rays = rayA * 0.45 + rayB * 0.35 + rayC * 0.25;
 
-    float radialFalloff = pow(max(0.0, 1.0 - r), 2.8) * smoothstep(0.05, 0.24, r);
+    float radialFalloff = pow(max(0.0001, 1.0 - r), 2.8) * smoothstep(0.05, 0.24, r);
     float alpha = rays * radialFalloff * uIntensity;
     gl_FragColor = vec4(uColor * (0.78 + rays * 0.28), clamp(alpha, 0.0, 0.42));
   }
@@ -378,8 +380,9 @@ export const ACCRETION_DISK_FRAGMENT_SHADER = /* glsl */ `
     float filaments = 0.54 + 0.26 * swirl1 + 0.20 * swirl2;
 
     // Razor-crisp relativistic photon ring bordering the dark event-horizon shadow
-    float photonRing = exp(-pow((r - 0.29) * 34.0, 2.0)) * 0.92;
-    float diskBody = smoothstep(0.24, 0.36, r) * pow(max(0.0, 1.0 - r), 2.45);
+    float prDelta = (r - 0.29) * 34.0;
+    float photonRing = exp(-(prDelta * prDelta)) * 0.92;
+    float diskBody = smoothstep(0.24, 0.36, r) * pow(max(0.0001, 1.0 - r), 2.45);
 
     // Relativistic Doppler beaming: subtle hot-vs-cool orbital asymmetry
     float doppler = 0.68 + 0.36 * cos(angle + 0.45);
@@ -417,7 +420,7 @@ export const BIG_BANG_VERTEX_SHADER = /* glsl */ `
     vec3 dir = aDirection;
     dir.xz = mat2(c, -s, s, c) * dir.xz;
 
-    float radius = pow(uExpansion, 0.82) * (12.0 + aSpeed * 58.0);
+    float radius = pow(max(0.0001, uExpansion), 0.82) * (12.0 + aSpeed * 58.0);
     vec3 pos = dir * radius;
     vec3 curl = curlField(pos * 0.14, uTime * 0.65);
     pos += curl * (1.85 * uExpansion * (0.4 + aSpeed * 0.6));
@@ -563,7 +566,8 @@ export const EARTH_SURFACE_FRAGMENT_SHADER = /* glsl */ `
     float macroNdotL = dot(geomN, L);
     float microNdotL = dot(N, L);
     float dayFactor = smoothstep(-0.14, 0.24, macroNdotL);
-    float twilightBand = exp(-pow((macroNdotL + 0.025) * 5.6, 2.0));
+    float twDelta = (macroNdotL + 0.025) * 5.6;
+    float twilightBand = exp(-(twDelta * twDelta));
     float nightFactor = smoothstep(0.08, -0.20, macroNdotL);
 
     // High-contrast sunlit continents & oceans with crisp micro-topography
@@ -572,17 +576,17 @@ export const EARTH_SURFACE_FRAGMENT_SHADER = /* glsl */ `
     vec3 dayColor = albedo * (0.018 + 1.05 * diffuse) * sunTint * cloudShadow;
 
     // Sharp Fresnel solar ocean sun-glint strictly on coastline-masked water
-    float fresnel = pow(1.0 - max(dot(geomN, V), 0.0), 3.4);
-    float spec = pow(max(dot(N, H), 0.0), 86.0) * oceanMask * (0.45 + 0.55 * fresnel) * dayFactor * cloudShadow;
+    float fresnel = pow(max(0.0001, 1.0 - clamp(dot(geomN, V), 0.0, 1.0)), 3.4);
+    float spec = pow(max(dot(N, H), 0.0001), 86.0) * oceanMask * (0.45 + 0.55 * fresnel) * dayFactor * cloudShadow;
     vec3 glintColor = mix(vec3(1.0, 0.94, 0.82), vec3(1.0, 0.64, 0.30), twilightBand) * spec * 0.92;
 
     // Deep obsidian night hemisphere + contrast-shaped 4K satellite city networks
     vec3 nightAmbient = albedo * vec3(0.018, 0.032, 0.07) * nightFactor;
-    vec3 crispCities = pow(max(nightLights, vec3(0.0)), vec3(1.16));
+    vec3 crispCities = pow(max(nightLights, vec3(0.0001)), vec3(1.16));
     vec3 cityGlow = crispCities * vec3(1.08, 0.94, 0.76) * (nightFactor * 1.28 + twilightBand * 0.42);
 
     // Subtle Rayleigh atmospheric scatter creeping along the orbital limb
-    float limb = pow(1.0 - max(dot(geomN, V), 0.0), 4.0);
+    float limb = pow(max(0.0001, 1.0 - clamp(dot(geomN, V), 0.0, 1.0)), 4.0);
     vec3 limbScatter = mix(vec3(0.20, 0.50, 0.96), vec3(0.98, 0.58, 0.24), twilightBand * 0.82) * limb * (0.06 + 0.40 * dayFactor);
 
     vec3 finalCol = dayColor + glintColor + nightAmbient + cityGlow + limbScatter;
@@ -611,9 +615,9 @@ export const MILKY_WAY_SKY_FRAGMENT_SHADER = /* glsl */ `
   void main() {
     vec3 raw = texture2D(uMap, vUv).rgb;
     // Contrast-shape to preserve deep obsidian space and sharp galactic dust lanes
-    vec3 shaped = pow(max(raw, vec3(0.0)), vec3(1.52));
+    vec3 shaped = pow(max(raw, vec3(0.0001)), vec3(1.52));
     // Subtle cinema color grade: cool deep-space indigo with restrained warm galactic core
-    vec3 graded = shaped * vec3(0.76, 0.82, 0.98) + vec3(0.14, 0.08, 0.02) * pow(max(raw.r - raw.b, 0.0), 1.4);
+    vec3 graded = shaped * vec3(0.76, 0.82, 0.98) + vec3(0.14, 0.08, 0.02) * pow(max(raw.r - raw.b, 0.0001), 1.4);
     gl_FragColor = vec4(graded * uOpacity, 1.0);
   }
 `;
@@ -651,15 +655,16 @@ export const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
     // On BackSide sphere, -dot(V, N) is 0 at the outer silhouette edge and increases inward
     // toward the planetary limb, yielding a smooth exponential atmosphere fading cleanly to space.
     float backFacing = clamp(-dot(V, N), 0.0, 1.0);
-    float outerFade = pow(backFacing, 2.6) * smoothstep(0.0, 0.28, backFacing);
+    float outerFade = pow(max(0.0001, backFacing), 2.6) * smoothstep(0.0, 0.28, backFacing);
 
     float sunDot = dot(N, L);
     float dayFactor = smoothstep(-0.32, 0.52, sunDot);
-    float terminator = exp(-pow((sunDot + 0.04) * 3.8, 2.0));
+    float termDelta = (sunDot + 0.04) * 3.8;
+    float terminator = exp(-(termDelta * termDelta));
 
     // Mie forward-scattering golden glow along the sunlit dawn limb
     float cosTheta = max(dot(-V, L), 0.0);
-    float miePhase = pow(cosTheta, 5.0) * 0.55;
+    float miePhase = pow(max(0.0001, cosTheta), 5.0) * 0.55;
 
     vec3 rayleigh = mix(uDayColor * 0.25, uDayColor, dayFactor);
     vec3 col = mix(rayleigh, uSunriseColor, clamp(terminator * 0.85 + miePhase * 0.45, 0.0, 1.0));
@@ -691,7 +696,7 @@ export const SUN_CORONA_FRAGMENT_SHADER = /* glsl */ `
     float angle = atan(p.y, p.x);
     float rays = 0.86 + 0.14 * sin(angle * 7.0 + uTime * 0.4) * cos(angle * 11.0 - uTime * 0.3);
     float core = exp(-r * r * 20.0);
-    float corona = pow(max(0.0, 1.0 - r), 3.0) * rays * 0.9;
+    float corona = pow(max(0.0001, 1.0 - r), 3.0) * rays * 0.9;
 
     vec3 innerCol = vec3(1.0, 0.97, 0.88);
     vec3 outerCol = vec3(0.98, 0.64, 0.24);
@@ -730,7 +735,8 @@ export const FLUID_RIBBON_FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
-    float fresnel = pow(1.0 - abs(dot(viewDir, vNormal)), 2.0);
+    float fBase = clamp(1.0 - abs(dot(viewDir, vNormal)), 0.0, 1.0);
+    float fresnel = fBase * fBase;
     float stream = 0.5 + 0.5 * sin(vUv.x * 22.0 - uTime * 1.8 + sin(vUv.y * 8.0));
     vec3 col = mix(uPrimaryColor, uSecondaryColor, stream * 0.65 + fresnel * 0.45);
     float alpha = (0.24 + 0.46 * fresnel + 0.14 * stream) * uOpacity;
@@ -896,7 +902,7 @@ export const GEODESIC_SINGULARITY_FRAGMENT_SHADER = /* glsl */ `
     float u = atan(d.z, d.x) / 6.2831853 + 0.5;
     float v = asin(clamp(d.y, -1.0, 1.0)) / 3.14159265 + 0.5;
     vec3 raw = texture2D(uMilkyWayMap, vec2(u, v)).rgb;
-    vec3 shaped = pow(max(raw, vec3(0.0)), vec3(1.55));
+    vec3 shaped = pow(max(raw, vec3(0.0001)), vec3(1.55));
     return shaped * vec3(0.76, 0.84, 1.0) * 0.55;
   }
 
@@ -998,7 +1004,7 @@ export const GEODESIC_SINGULARITY_FRAGMENT_SHADER = /* glsl */ `
 
           // Crisp ISCO inner brightening & silky wide outer feathering
           float innerGlow = exp(-radNorm * 7.5) * 0.85;
-          float radialEnv = smoothstep(0.0, 0.07, radNorm) * pow(max(0.0, 1.0 - radNorm), 1.75);
+          float radialEnv = smoothstep(0.0, 0.07, radNorm) * pow(max(0.0001, 1.0 - radNorm), 1.75);
 
           // Relativistic Doppler beaming (left approaching limb white-gold, receding ember)
           vec3 tangent = normalize(vec3(-hit.z, 0.0, hit.x));
@@ -1015,7 +1021,8 @@ export const GEODESIC_SINGULARITY_FRAGMENT_SHADER = /* glsl */ `
     }
 
     // Razor-thin relativistic photon sphere ring at r = 1.5 Rs
-    float photonRing = exp(-pow((minR - rs * 1.50) / (rs * 0.075), 2.0)) * 0.88;
+    float prDelta = (minR - rs * 1.50) / max(0.0001, rs * 0.075);
+    float photonRing = exp(-(prDelta * prDelta)) * 0.88;
     accum += mix(uInnerColor, vec3(1.0, 0.95, 0.82), 0.58) * photonRing * (1.0 - alphaAccum * 0.40);
 
     // Bent 4K Milky Way Einstein-ring refraction for escaping rays near the black hole
@@ -1145,7 +1152,8 @@ export const VOLUMETRIC_CLOUDS_FRAGMENT_SHADER = /* glsl */ `
 
     float ndotl = dot(N, L);
     float dayFactor = smoothstep(-0.18, 0.30, ndotl);
-    float twilight = exp(-pow((ndotl + 0.03) * 5.2, 2.0));
+    float twDelta = (ndotl + 0.03) * 5.2;
+    float twilight = exp(-(twDelta * twDelta));
     float nightFactor = smoothstep(0.06, -0.22, ndotl);
 
     // Henyey-Greenstein forward scattering along dawn terminator (burnt-orange / amber glow)
@@ -1206,7 +1214,7 @@ export const MOON_ECLIPSE_FRAGMENT_SHADER = /* glsl */ `
 
     // Oren-Nayar-like dusty regolith diffuse
     float ndotl = max(dot(perturbedN, L), 0.0);
-    float diffuse = pow(ndotl, 0.88);
+    float diffuse = pow(max(0.0001, ndotl), 0.88);
 
     // Analytical Earth umbra / copper penumbra / sapphire Earthshine
     vec3 ec = computePlanetaryEclipse(vWorldPos, uEarthCenter, uEarthRadius, uSunDir);
@@ -1223,7 +1231,7 @@ export const MOON_ECLIPSE_FRAGMENT_SHADER = /* glsl */ `
     vec3 copperEclipse = albedo * vec3(0.88, 0.30, 0.10) * diffuse * copperRim * 0.68;
 
     // Subtle grazing horizon rim
-    float rim = pow(1.0 - max(dot(N, V), 0.0), 4.0) * max(ndotl, 0.15) * 0.12;
+    float rim = pow(max(0.0001, 1.0 - clamp(dot(N, V), 0.0, 1.0)), 4.0) * max(ndotl, 0.15) * 0.12;
     vec3 col = sunlit + copperEclipse + earthshineCol + vec3(0.45, 0.55, 0.75) * rim;
     gl_FragColor = vec4(col, uOpacity);
   }
@@ -1264,8 +1272,8 @@ export const ASTROLABE_ECLIPSE_FRAGMENT_SHADER = /* glsl */ `
     vec3 H = normalize(L + V);
 
     float ndotl = 0.25 + 0.75 * max(dot(N, L), 0.0);
-    float spec = pow(max(dot(N, H), 0.0), 42.0) * 0.85;
-    float fresnel = pow(1.0 - abs(dot(N, V)), 2.5) * 0.35;
+    float spec = pow(max(dot(N, H), 0.0001), 42.0) * 0.85;
+    float fresnel = pow(max(0.0001, 1.0 - abs(dot(N, V))), 2.5) * 0.35;
 
     vec3 ec = computePlanetaryEclipse(vWorldPos, uEarthCenter, uEarthRadius, uSunDir);
     float sunVis = ec.x;
@@ -1363,8 +1371,8 @@ export const BINARY_STAR_FRAGMENT_SHADER = /* glsl */ `
     float fineVeins = smoothstep(0.46, 0.82, fbm3(p * 4.4 - vec3(uTime * 0.25, warp, 0.0)));
 
     // Astrophysical limb darkening + crisp Fresnel coronal edge
-    float limbDark = pow(ndotv, 0.42);
-    float fresnel = pow(1.0 - ndotv, 2.8);
+    float limbDark = pow(max(0.0001, ndotv), 0.42);
+    float fresnel = pow(max(0.0001, 1.0 - clamp(ndotv, 0.0, 1.0)), 2.8);
 
     float heat = clamp(cells * 0.85 + fineVeins * 0.42, 0.0, 1.0);
     vec3 surf = mix(uMidColor * 0.52, uMidColor * 1.12, smoothstep(0.18, 0.68, heat));
@@ -1418,18 +1426,19 @@ export const TIDAL_BRIDGE_FRAGMENT_SHADER = /* glsl */ `
     float lobeAxis = cos(theta); // +1 gold lobe -> 0 at L1 -> -1 violet lobe
 
     // Cylindrical edge softness (luminous volumetric plasma core, gossamer outer sheath)
-    float edgeSoft = pow(abs(dot(normalize(vNormal), normalize(vViewDir))), 1.3);
+    float edgeSoft = pow(max(0.0001, abs(dot(normalize(vNormal), normalize(vViewDir)))), 1.3);
 
     // Periodic integer-frequency plasma filaments so u=0 and u=1 join with ZERO seam!
     float flowA = theta * 4.0 - uTime * 2.2 * uFlowDir;
     float flowB = theta * 7.0 - uTime * 3.1 * uFlowDir;
     float strandA = 0.5 + 0.5 * sin(flowA + sin(vUv.y * 12.56637) * 1.6);
     float strandB = 0.5 + 0.5 * cos(flowB - vUv.y * 6.2831853);
-    float filament = pow(clamp(strandA * 0.65 + strandB * 0.45, 0.0, 1.0), 1.45);
+    float filament = pow(clamp(strandA * 0.65 + strandB * 0.45, 0.0001, 1.0), 1.45);
 
     // Smooth harmonic color grading across the figure-eight: solar gold <-> incandescent pearl L1 <-> sapphire-violet
     float sideMix = smoothstep(-0.85, 0.85, lobeAxis);
-    float l1Glow = exp(-pow(lobeAxis * 3.6, 2.0));
+    float l1Delta = lobeAxis * 3.6;
+    float l1Glow = exp(-(l1Delta * l1Delta));
     vec3 baseCol = mix(uVioletColor, uGoldColor, sideMix);
     baseCol = mix(baseCol, vec3(0.98, 0.96, 1.0), l1Glow * 0.55);
 
@@ -1470,8 +1479,8 @@ export const GRAV_WAVE_DISK_FRAGMENT_SHADER = /* glsl */ `
 
     // Classic quadrupole binary gravitational-wave double spiral (m = 2 harmonic)
     float spiralPhase = 2.0 * angle - r * 22.0 + uTime * 1.45;
-    float waveCrest = pow(0.5 + 0.5 * cos(spiralPhase), 3.6);
-    float fineHarmonic = pow(0.5 + 0.5 * cos(2.0 * angle - r * 44.0 + uTime * 2.1), 5.0) * 0.45;
+    float waveCrest = pow(max(0.0001, 0.5 + 0.5 * cos(spiralPhase)), 3.6);
+    float fineHarmonic = pow(max(0.0001, 0.5 + 0.5 * cos(2.0 * angle - r * 44.0 + uTime * 2.1)), 5.0) * 0.45;
 
     // Split polarity so the twin spiral arms subtly echo gold & sapphire-violet
     float armSplit = 0.5 + 0.5 * sin(angle - r * 11.0 + uTime * 0.725);
@@ -1480,11 +1489,13 @@ export const GRAV_WAVE_DISK_FRAGMENT_SHADER = /* glsl */ `
     vec3 col = mix(violetWave, goldWave, armSplit);
 
     // Inner barycenter clearance + silky exponential outer falloff (zero hard disk rim!)
-    float radialEnv = smoothstep(0.08, 0.24, r) * pow(max(0.0, 1.0 - r), 2.15);
+    float radialEnv = smoothstep(0.08, 0.24, r) * pow(max(0.0001, 1.0 - r), 2.15);
     float energy = (waveCrest * 0.65 + fineHarmonic) * radialEnv * (0.28 + 0.72 * uConverge);
 
     // Delicate orbital resonance rings at golden ratio intervals
-    float resRing = (exp(-pow((r - 0.36) * 42.0, 2.0)) + exp(-pow((r - 0.62) * 48.0, 2.0))) * 0.16 * radialEnv;
+    float resA = (r - 0.36) * 42.0;
+    float resB = (r - 0.62) * 48.0;
+    float resRing = (exp(-(resA * resA)) + exp(-(resB * resB))) * 0.16 * radialEnv;
 
     vec3 finalCol = col * (energy * 0.52 + resRing);
     float alpha = clamp((energy * 0.58 + resRing) * uOpacity, 0.0, 0.72);

@@ -31,8 +31,8 @@ export function computeCinemaPresentation(
   // Focal rack pulses gracefully across chapter entrance boundaries (silky S-curve pull)
   const chapterTransitions = [55, 110, 175, 225, 285, 335];
   let focalRack = 0;
-  for (let i = 0; i < chapterTransitions.length; i++) {
-    const dt = Math.abs(t - chapterTransitions[i]);
+  for (const boundary of chapterTransitions) {
+    const dt = Math.abs(t - boundary);
     if (dt < 4.5) {
       const bell = 1 - smoothstep(0.0, 4.5, dt);
       focalRack = Math.max(focalRack, bell * bell);

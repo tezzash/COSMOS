@@ -94,8 +94,7 @@ export function computeAmbientAtmosphereState(
 
   let peakSwell = 0;
   let activeMoment = 'ambient-bed';
-  for (let i = 0; i < HIGH_IMPACT_MOMENTS.length; i++) {
-    const m = HIGH_IMPACT_MOMENTS[i];
+  for (const m of HIGH_IMPACT_MOMENTS) {
     const env = evaluateMomentEnvelope(t, m);
     if (env > peakSwell) {
       peakSwell = env;

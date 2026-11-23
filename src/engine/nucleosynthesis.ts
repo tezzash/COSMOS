@@ -179,8 +179,7 @@ export function findTriggeredStarBirths(
   const isSeekJump =
     currentFilmTime < prevFilmTime - 0.05 || currentFilmTime - prevFilmTime > 3.5;
 
-  for (let i = 0; i < SCHEDULED_STAR_BIRTHS.length; i++) {
-    const ev = SCHEDULED_STAR_BIRTHS[i];
+  for (const ev of SCHEDULED_STAR_BIRTHS) {
     if (isSeekJump) {
       const age = currentFilmTime - ev.triggerTime;
       if (age >= 0 && age <= seekLookbackSec) {

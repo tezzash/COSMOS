@@ -43,7 +43,12 @@ const LUT_FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     vec4 base = texture(tDiffuse, vUv);
-    vec3 rgb = clamp(base.rgb, 0.0, 1.0);
+    vec3 safeBase = vec3(
+      base.r >= 0.0 ? base.r : 0.0,
+      base.g >= 0.0 ? base.g : 0.0,
+      base.b >= 0.0 ? base.b : 0.0
+    );
+    vec3 rgb = clamp(safeBase, 0.0, 1.0);
 
     vec3 gradedCool = sampleLut(uLutCool, rgb);
     vec3 gradedViolet = sampleLut(uLutViolet, rgb);
@@ -108,11 +113,10 @@ export class LutColorGradePass extends Pass {
   }
 
   public setWeights(w: ChapterLutWeights): void {
-    (this.mat.uniforms.uWeights.value as THREE.Vector3).set(
-      w.cosmosCool,
-      w.etherealViolet,
-      w.kodak2383Warm,
-    );
+    const uWeights = this.mat.uniforms.uWeights;
+    if (uWeights) {
+      (uWeights.value as THREE.Vector3).set(w.cosmosCool, w.etherealViolet, w.kodak2383Warm);
+    }
   }
 
   public override render(
@@ -120,7 +124,10 @@ export class LutColorGradePass extends Pass {
     writeBuffer: THREE.WebGLRenderTarget,
     readBuffer: THREE.WebGLRenderTarget,
   ): void {
-    this.mat.uniforms.tDiffuse.value = readBuffer.texture;
+    const tDiffuse = this.mat.uniforms.tDiffuse;
+    if (tDiffuse) {
+      tDiffuse.value = readBuffer.texture;
+    }
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }

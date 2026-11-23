@@ -1,5 +1,11 @@
 import * as THREE from 'three';
-import { clamp, getChapterWeight, smoothstep } from '../../data/chapters';
+import earthClouds4k from '@/assets/textures/earth_clouds_4k.jpg';
+import earthDay4k from '@/assets/textures/earth_day_4k.jpg';
+import earthNight4k from '@/assets/textures/earth_night_4k.jpg';
+import earthNormal4k from '@/assets/textures/earth_normal_4k.jpg';
+import earthSpecular4k from '@/assets/textures/earth_specular_4k.jpg';
+import moon4k from '@/assets/textures/moon_4k.jpg';
+import { clamp, getChapterWeight, smoothstep } from '@/data/chapters';
 import {
   ASTROLABE_ECLIPSE_FRAGMENT_SHADER,
   ASTROLABE_ECLIPSE_VERTEX_SHADER,
@@ -16,7 +22,7 @@ import {
   VOLUMETRIC_CLOUDS_FRAGMENT_SHADER,
   VOLUMETRIC_CLOUDS_VERTEX_SHADER,
   createSoftGlowTexture,
-} from '../shaders';
+} from '@/engine/shaders';
 
 function createNeutralNormalTexture(): THREE.DataTexture {
   const data = new Uint8Array([128, 128, 255, 255]);
@@ -209,9 +215,10 @@ export class EarthSequence {
   private starTriggered = false;
   private starLaunchProgress = 0;
   private loadedTextureCount = 0;
+  private failedTextureCount = 0;
   private disposed = false;
 
-  constructor(maxAnisotropy: number) {
+  constructor(maxAnisotropy: number, onAssetSettled?: (loaded: boolean) => void) {
     this.root.position.set(0, 0, -90);
 
     const sunDir = new THREE.Vector3(-0.78, 0.28, 0.55).normalize();
@@ -418,49 +425,61 @@ export class EarthSequence {
     this.root.add(this.moonMesh);
     this.disposables.push(moonTex.albedo, moonTex.bump, moonGeo, this.moonMat);
 
-    // Seamlessly upgrade procedural fallbacks with local 4K NASA/Solar System Scope textures
+    // Seamlessly upgrade procedural fallbacks with Vite-bundled 4K NASA/Solar System Scope textures
     const loader = new THREE.TextureLoader();
     const load4k = (
       url: string,
       opts: { srgb?: boolean; repeatS?: boolean },
       apply: (tex: THREE.Texture) => void,
     ) => {
-      loader.load(url, (tex) => {
-        if (this.disposed) {
-          tex.dispose();
-          return;
-        }
-        if (opts.srgb) tex.colorSpace = THREE.SRGBColorSpace;
-        if (opts.repeatS) tex.wrapS = THREE.RepeatWrapping;
-        tex.anisotropy = maxAnisotropy;
-        tex.minFilter = THREE.LinearMipmapLinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        tex.generateMipmaps = true;
-        tex.needsUpdate = true;
-        this.disposables.push(tex);
-        this.loadedTextureCount++;
-        apply(tex);
-      });
+      loader.load(
+        url,
+        (tex) => {
+          if (this.disposed) {
+            tex.dispose();
+            return;
+          }
+          if (opts.srgb) tex.colorSpace = THREE.SRGBColorSpace;
+          if (opts.repeatS) tex.wrapS = THREE.RepeatWrapping;
+          tex.anisotropy = maxAnisotropy;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.generateMipmaps = true;
+          tex.needsUpdate = true;
+          this.disposables.push(tex);
+          this.loadedTextureCount++;
+          apply(tex);
+          onAssetSettled?.(true);
+        },
+        undefined,
+        () => {
+          // Procedural CanvasTexture fallback remains active on network/decode error
+          if (!this.disposed) {
+            this.failedTextureCount++;
+            onAssetSettled?.(false);
+          }
+        },
+      );
     };
 
-    load4k('/textures/earth_day_4k.jpg', { srgb: true }, (tex) => {
-      this.earthMat.uniforms.uAlbedoMap.value = tex;
+    load4k(earthDay4k, { srgb: true }, (tex) => {
+      this.earthMat.uniforms.uAlbedoMap!.value = tex;
     });
-    load4k('/textures/earth_night_4k.jpg', { srgb: true }, (tex) => {
-      this.earthMat.uniforms.uNightLightsMap.value = tex;
+    load4k(earthNight4k, { srgb: true }, (tex) => {
+      this.earthMat.uniforms.uNightLightsMap!.value = tex;
     });
-    load4k('/textures/earth_specular_4k.jpg', { srgb: false }, (tex) => {
-      this.earthMat.uniforms.uOceanMaskMap.value = tex;
+    load4k(earthSpecular4k, { srgb: false }, (tex) => {
+      this.earthMat.uniforms.uOceanMaskMap!.value = tex;
     });
-    load4k('/textures/earth_normal_4k.jpg', { srgb: false }, (tex) => {
-      this.earthMat.uniforms.uNormalMap.value = tex;
+    load4k(earthNormal4k, { srgb: false }, (tex) => {
+      this.earthMat.uniforms.uNormalMap!.value = tex;
     });
-    load4k('/textures/earth_clouds_4k.jpg', { srgb: false, repeatS: true }, (tex) => {
-      this.earthMat.uniforms.uCloudMap.value = tex;
-      this.volumetricCloudsMat.uniforms.uCloudMap.value = tex;
+    load4k(earthClouds4k, { srgb: false, repeatS: true }, (tex) => {
+      this.earthMat.uniforms.uCloudMap!.value = tex;
+      this.volumetricCloudsMat.uniforms.uCloudMap!.value = tex;
     });
-    load4k('/textures/moon_4k.jpg', { srgb: true }, (tex) => {
-      this.moonMat.uniforms.uMap.value = tex;
+    load4k(moon4k, { srgb: true }, (tex) => {
+      this.moonMat.uniforms.uMap!.value = tex;
     });
 
     // 5. Interactive Birth Star Particle above Earth's upper atmosphere
@@ -526,11 +545,13 @@ export class EarthSequence {
     this.root.visible = weight > 0.004;
     if (!this.root.visible) return;
 
-    this.sunMat.uniforms.uTime.value = elapsed;
-    this.sunMat.uniforms.uIntensity.value = weight * 0.92;
-    this.sunRaysMat.uniforms.uTime.value = elapsed;
-    this.sunRaysMat.uniforms.uIntensity.value = weight * 0.24;
-    this.atmosphereMat.uniforms.uIntensity.value = weight * 0.85;
+    if (this.sunMat.uniforms.uTime) this.sunMat.uniforms.uTime.value = elapsed;
+    if (this.sunMat.uniforms.uIntensity) this.sunMat.uniforms.uIntensity.value = weight * 0.92;
+    if (this.sunRaysMat.uniforms.uTime) this.sunRaysMat.uniforms.uTime.value = elapsed;
+    if (this.sunRaysMat.uniforms.uIntensity) this.sunRaysMat.uniforms.uIntensity.value = weight * 0.24;
+    if (this.atmosphereMat.uniforms.uIntensity) {
+      this.atmosphereMat.uniforms.uIntensity.value = weight * 0.85;
+    }
 
     // Gentle sidereal rotation + volumetric 3D cloud wind drift + surface cloud-shadow sync
     const earthRotY = -2.35 + (filmTime - 55) * 0.008;
@@ -538,13 +559,23 @@ export class EarthSequence {
     const cloudUvOffset = (cloudDrift / (Math.PI * 2)) % 1;
     this.earthMesh.rotation.y = earthRotY;
     this.volumetricCloudsMesh.rotation.y = earthRotY;
-    this.volumetricCloudsMat.uniforms.uCloudOffset.value = cloudUvOffset;
-    this.volumetricCloudsMat.uniforms.uOpacity.value = weight * 0.94;
-    this.earthMat.uniforms.uCloudOffset.value = cloudUvOffset;
-    this.earthMat.uniforms.uOpacity.value = weight;
-    this.moonMat.uniforms.uOpacity.value = weight;
-    this.ringMatPrimary.uniforms.uOpacity.value = weight * 0.58;
-    this.ringMatFine.uniforms.uOpacity.value = weight * 0.36;
+    if (this.volumetricCloudsMat.uniforms.uCloudOffset) {
+      this.volumetricCloudsMat.uniforms.uCloudOffset.value = cloudUvOffset;
+    }
+    if (this.volumetricCloudsMat.uniforms.uOpacity) {
+      this.volumetricCloudsMat.uniforms.uOpacity.value = weight * 0.94;
+    }
+    if (this.earthMat.uniforms.uCloudOffset) {
+      this.earthMat.uniforms.uCloudOffset.value = cloudUvOffset;
+    }
+    if (this.earthMat.uniforms.uOpacity) this.earthMat.uniforms.uOpacity.value = weight;
+    if (this.moonMat.uniforms.uOpacity) this.moonMat.uniforms.uOpacity.value = weight;
+    if (this.ringMatPrimary.uniforms.uOpacity) {
+      this.ringMatPrimary.uniforms.uOpacity.value = weight * 0.58;
+    }
+    if (this.ringMatFine.uniforms.uOpacity) {
+      this.ringMatFine.uniforms.uOpacity.value = weight * 0.36;
+    }
     this.moonMesh.rotation.y = elapsed * 0.03;
 
     this.astrolabeGroup.rotation.y = elapsed * 0.04;
@@ -583,12 +614,20 @@ export class EarthSequence {
           THREE.MathUtils.lerp(4.2, 4.0, sp) - Math.sin(sp * Math.PI) * 2.0;
         this.birthStarTrailPositions[i * 3 + 2] = THREE.MathUtils.lerp(7.6, -26.0, sp * sp);
       }
-      this.birthStarTrail.geometry.attributes.position.needsUpdate = true;
+      if (this.birthStarTrail.geometry.attributes.position) {
+        if (this.birthStarTrail.geometry.attributes.position) {
+        this.birthStarTrail.geometry.attributes.position.needsUpdate = true;
+      }
+      }
     }
   }
 
   public getLoadedTextureCount(): number {
     return this.loadedTextureCount;
+  }
+
+  public getFailedTextureCount(): number {
+    return this.failedTextureCount;
   }
 
   public dispose(): void {

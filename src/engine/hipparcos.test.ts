@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import {
   BIRTH_DATE_UTC,
   HIPPARCOS_ANCHOR_STARS,
@@ -63,12 +63,12 @@ test('buildHyderabadHipparcosStarfield generates 9000 finite stars including all
   assert.ok(HIPPARCOS_ANCHOR_STARS.length >= 80);
 
   // Sirius (index 0) should be among the brightest/largest stars in the catalog
-  assert.ok(field.scales[0] > 4.2);
+  assert.ok((field.scales[0] ?? 0) > 4.2);
 
   for (let i = 0; i < 9000; i++) {
-    const x = field.positions[i * 3];
-    const y = field.positions[i * 3 + 1];
-    const z = field.positions[i * 3 + 2];
+    const x = field.positions[i * 3] ?? NaN;
+    const y = field.positions[i * 3 + 1] ?? NaN;
+    const z = field.positions[i * 3 + 2] ?? NaN;
     const r = Math.hypot(x, y, z);
     assert.ok(Number.isFinite(r) && r > 350 && r < 420);
   }

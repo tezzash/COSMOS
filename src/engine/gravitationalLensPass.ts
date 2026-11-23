@@ -61,7 +61,8 @@ export const GRAVITATIONAL_LENS_SHADER = {
         (uStrength * 0.048 * re * re) / (r * r + re * re * 0.36) * coreGuard * outerFalloff;
 
       // Delicate rotational frame-dragging (Kerr swirl) along the Einstein ring
-      float ringBand = exp(-pow((r - re) / max(0.04, re * 0.42), 2.0));
+      float ringDelta = (r - re) / max(0.04, re * 0.42);
+      float ringBand = exp(-(ringDelta * ringDelta));
       float frameDrag = uStrength * 0.0075 * ringBand;
 
       vec2 radialUvOffset = vec2(dir.x / max(uAspect, 0.001), dir.y) * deflection;
@@ -83,12 +84,19 @@ export const GRAVITATIONAL_LENS_SHADER = {
       // Subtle animated Einstein-ring gravitational caustic shimmer
       float angle = atan(aspectDelta.y, aspectDelta.x);
       float causticArc = 0.65 + 0.35 * sin(angle * 2.0 + uTime * 0.85);
-      float sharpRing = exp(-pow((r - re) / 0.014, 2.0));
-      float softHalo = exp(-pow((r - re) / 0.055, 2.0)) * 0.32;
+      float sharpDelta = (r - re) / 0.014;
+      float softDelta = (r - re) / 0.055;
+      float sharpRing = exp(-(sharpDelta * sharpDelta));
+      float softHalo = exp(-(softDelta * softDelta)) * 0.32;
       vec3 causticColor = mix(vec3(0.55, 0.78, 1.0), vec3(0.98, 0.82, 0.50), causticArc);
       col += causticColor * (sharpRing + softHalo) * uRingGlint * causticArc;
 
-      gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
+      col = vec3(
+        col.r >= 0.0 ? col.r : 0.0,
+        col.g >= 0.0 ? col.g : 0.0,
+        col.b >= 0.0 ? col.b : 0.0
+      );
+      gl_FragColor = vec4(col, 1.0);
     }
   `,
 };
@@ -96,19 +104,25 @@ export const GRAVITATIONAL_LENS_SHADER = {
 export class GravitationalLensPass extends ShaderPass {
   constructor(aspect = 16 / 9) {
     super(GRAVITATIONAL_LENS_SHADER);
-    this.uniforms.uAspect.value = aspect;
+    if (this.uniforms.uAspect) {
+      this.uniforms.uAspect.value = aspect;
+    }
   }
 
   public setAspect(aspect: number): void {
-    this.uniforms.uAspect.value = aspect;
+    if (this.uniforms.uAspect) {
+      this.uniforms.uAspect.value = aspect;
+    }
   }
 
   public applyState(state: GravitationalLensState, elapsed: number): void {
-    this.uniforms.uStrength.value = state.strength;
-    this.uniforms.uEinsteinRadius.value = state.einsteinRadius;
-    (this.uniforms.uCenter.value as THREE.Vector2).set(state.centerX, state.centerY);
-    this.uniforms.uDispersion.value = state.dispersion;
-    this.uniforms.uRingGlint.value = state.ringGlint;
-    this.uniforms.uTime.value = elapsed;
+    if (this.uniforms.uStrength) this.uniforms.uStrength.value = state.strength;
+    if (this.uniforms.uEinsteinRadius) this.uniforms.uEinsteinRadius.value = state.einsteinRadius;
+    if (this.uniforms.uCenter) {
+      (this.uniforms.uCenter.value as THREE.Vector2).set(state.centerX, state.centerY);
+    }
+    if (this.uniforms.uDispersion) this.uniforms.uDispersion.value = state.dispersion;
+    if (this.uniforms.uRingGlint) this.uniforms.uRingGlint.value = state.ringGlint;
+    if (this.uniforms.uTime) this.uniforms.uTime.value = elapsed;
   }
 }

@@ -67,7 +67,7 @@ const COSMIC_DRIFT_FRAGMENT_SHADER = /* glsl */ `
 
     // Razor-sharp astronomical pinpoint core with ultra-restrained halo (preserves obsidian void)
     float core = exp(-d * d * 112.0);
-    float halo = pow(max(0.0, 1.0 - d * 2.0), 4.8) * 0.16;
+    float halo = pow(max(0.0001, 1.0 - d * 2.0), 4.8) * 0.16;
     float intensity = core + halo;
 
     vec3 col = mix(vColor, vec3(1.0, 0.985, 0.96), clamp(core * 0.65, 0.0, 1.0));
@@ -134,9 +134,11 @@ export class CosmicDriftField {
       phases[i] = rand();
 
       const c = palette[Math.floor(rand() * palette.length)];
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
+      if (c) {
+        colors[i * 3] = c.r;
+        colors[i * 3 + 1] = c.g;
+        colors[i * 3 + 2] = c.b;
+      }
     }
 
     this.geometry = new THREE.BufferGeometry();
@@ -182,31 +184,30 @@ export class CosmicDriftField {
     this.lastState = state;
 
     const damp = 1 - Math.exp(-4.5 * Math.min(delta, 0.1));
-    this.mat.uniforms.uTime.value = elapsed;
-    this.mat.uniforms.uOpacity.value = THREE.MathUtils.lerp(
-      this.mat.uniforms.uOpacity.value as number,
-      state.opacity,
-      damp,
-    );
-    this.mat.uniforms.uWarmth.value = THREE.MathUtils.lerp(
-      this.mat.uniforms.uWarmth.value as number,
-      state.warmth,
-      damp,
-    );
+    const u = this.mat.uniforms;
+    if (u.uTime) u.uTime.value = elapsed;
+    if (u.uOpacity) {
+      u.uOpacity.value = THREE.MathUtils.lerp(u.uOpacity.value as number, state.opacity, damp);
+    }
+    if (u.uWarmth) {
+      u.uWarmth.value = THREE.MathUtils.lerp(u.uWarmth.value as number, state.warmth, damp);
+    }
 
-    (this.mat.uniforms.uCameraPos.value as THREE.Vector3).set(
-      parallaxInput.cameraPos.x,
-      parallaxInput.cameraPos.y,
-      parallaxInput.cameraPos.z,
-    );
-    (this.mat.uniforms.uScrollOffset.value as THREE.Vector3).set(
-      state.scrollX,
-      state.scrollY,
-      state.scrollZ,
-    );
+    if (u.uCameraPos) {
+      (u.uCameraPos.value as THREE.Vector3).set(
+        parallaxInput.cameraPos.x,
+        parallaxInput.cameraPos.y,
+        parallaxInput.cameraPos.z,
+      );
+    }
+    if (u.uScrollOffset) {
+      (u.uScrollOffset.value as THREE.Vector3).set(state.scrollX, state.scrollY, state.scrollZ);
+    }
 
     writeParallaxOffset(_driftParallaxTarget, parallaxInput, 0.42, parallaxOptions);
-    (this.mat.uniforms.uParallaxOffset.value as THREE.Vector3).lerp(_driftParallaxTarget, damp);
+    if (u.uParallaxOffset) {
+      (u.uParallaxOffset.value as THREE.Vector3).lerp(_driftParallaxTarget, damp);
+    }
   }
 
   public getState(): CosmicDriftState {

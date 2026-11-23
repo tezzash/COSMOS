@@ -1,4 +1,15 @@
-import { ChapterId, TITLE_REVEAL_TIME } from './chapters';
+import {
+  BIRTHDAY_REVEAL_TIME,
+  type ChapterId,
+  ORBITAL_CODA_TIME,
+  SILENCE_END,
+  SILENCE_START,
+  TITLE_REVEAL_TIME,
+  clamp,
+  getChapterPauseRange,
+} from './chapters';
+
+export type NarrationSequenceRole = 'narration' | 'reveal-greeting' | 'post-reveal-coda';
 
 export interface NarrationLine {
   id: string;
@@ -8,6 +19,22 @@ export interface NarrationLine {
   text: string;
   containsReveal?: boolean;
   tone?: 'monumental' | 'warm' | 'playful' | 'quiet' | 'climax';
+  sequenceRole?: NarrationSequenceRole;
+}
+
+export interface NarrationBeatSpec {
+  id: string;
+  chapterId: ChapterId;
+  text: string;
+  /** Optional explicit cue start in seconds (chapter openings & locked emotional beats) */
+  anchorStartSec?: number;
+  /** Target speaking duration in seconds (falls back to cinematic WPM estimation) */
+  durationSec?: number;
+  /** Deliberate silent visual/musical pause after this cue before the next cue */
+  pauseAfterSec: number;
+  containsReveal?: boolean;
+  tone?: 'monumental' | 'warm' | 'playful' | 'quiet' | 'climax';
+  sequenceRole?: NarrationSequenceRole;
 }
 
 export interface AstronomicalFact {
@@ -23,6 +50,23 @@ export interface ConstellationTrait {
   word: string;
   start: number;
   end: number;
+}
+
+export interface ChapterPacingStats {
+  readonly lineCount: number;
+  readonly wordCount: number;
+  readonly spokenSec: number;
+  readonly gapsSec: number[];
+  readonly minGapSec: number;
+  readonly maxGapSec: number;
+}
+
+export interface ScreenplayPacingSummary {
+  readonly totalLines: number;
+  readonly totalWords: number;
+  readonly totalSpokenSec: number;
+  readonly averageWpm: number;
+  readonly byChapter: Record<ChapterId, ChapterPacingStats>;
 }
 
 export const ASTRONOMICAL_FACTS: AstronomicalFact[] = [
@@ -77,128 +121,187 @@ export const CONSTELLATION_TRAITS: ConstellationTrait[] = [
   { word: 'DETERMINATION', start: 171.2, end: 174.8 },
 ];
 
-export const SCREENPLAY_LINES: NarrationLine[] = [
+function roundTenth(sec: number): number {
+  return Math.round(sec * 10) / 10;
+}
+
+function countWords(text: string): number {
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+/**
+ * Estimates a natural cinematic speaking window for a narration beat when an
+ * explicit duration is not specified (~128 WPM baseline, slightly slower for quiet beats).
+ */
+export function estimateCinematicBeatDuration(
+  text: string,
+  tone: NarrationLine['tone'] = 'warm',
+): number {
+  const words = countWords(text);
+  const wpm = tone === 'quiet' ? 116 : tone === 'monumental' ? 122 : 132;
+  const punctuationPauses = (text.match(/[.!?—…]/g) ?? []).length * 0.22;
+  return roundTenth(Math.max(3.2, (words / wpm) * 60 + punctuationPauses));
+}
+
+/**
+ * Deterministically converts declarative screenplay beat specs (with explicit
+ * inter-cue visual/musical pause intervals) into non-overlapping timeline cues.
+ */
+export function buildTimedScreenplay(beats: readonly NarrationBeatSpec[]): NarrationLine[] {
+  const lines: NarrationLine[] = [];
+  let cursor = 0;
+
+  for (let i = 0; i < beats.length; i++) {
+    const beat = beats[i];
+    if (!beat) continue;
+
+    const start = roundTenth(
+      beat.anchorStartSec !== undefined ? Math.max(cursor, beat.anchorStartSec) : cursor,
+    );
+    const duration = roundTenth(
+      beat.durationSec ?? estimateCinematicBeatDuration(beat.text, beat.tone),
+    );
+    const end = roundTenth(start + duration);
+
+    lines.push({
+      id: beat.id,
+      chapterId: beat.chapterId,
+      start,
+      end,
+      text: beat.text,
+      tone: beat.tone,
+      ...(beat.containsReveal ? { containsReveal: true } : {}),
+      ...(beat.sequenceRole ? { sequenceRole: beat.sequenceRole } : {}),
+    });
+
+    const nextBeat = beats[i + 1];
+    const chapterPauseRange =
+      nextBeat && nextBeat.chapterId === beat.chapterId
+        ? getChapterPauseRange(beat.chapterId)
+        : undefined;
+    const effectivePause = chapterPauseRange
+      ? clamp(beat.pauseAfterSec, chapterPauseRange[0], chapterPauseRange[1])
+      : Math.max(0, beat.pauseAfterSec);
+
+    cursor = roundTenth(end + effectivePause);
+  }
+
+  return lines;
+}
+
+/**
+ * Refactored cinema-paced screenplay:
+ * - ~15% leaner overall narration length (~498 words / ~238s spoken across 405s runtime)
+ *   for effortless ~125 WPM breathing room and visual immersion.
+ * - Explicit 2–4 second pauses of pure visuals & score between every beat in
+ *   Chapters I (3.0–3.6s), IV (3.2–3.8s), and V (3.4–3.8s).
+ * - Swapped Final Reveal order: "Happy Birthday, Isha." lands immediately after the
+ *   371.5s ISHA constellation reveal, followed by the 24-orbit / 22.5B km statistics
+ *   as a warm coda at 379.5s.
+ */
+export const SCREENPLAY_BEATS: readonly NarrationBeatSpec[] = [
   // PROLOGUE — BEFORE ANYTHING HAD A NAME (00:00–00:55)
   {
     id: 'p-1',
     chapterId: 'prologue',
-    start: 2.4,
-    end: 10.0,
-    text: 'Before there was a before... Before time learned to count. Before space had somewhere to stretch its endless arms.',
+    anchorStartSec: 3.6,
+    durationSec: 5.8,
+    pauseAfterSec: 3.0,
+    text: 'Before time learned to count. Before space stretched open.',
     tone: 'monumental',
   },
   {
     id: 'p-2',
     chapterId: 'prologue',
-    start: 10.4,
-    end: 17.0,
-    text: 'There was a beginning. And from that beginning came everything. Matter. Energy. Time. Gravity.',
+    durationSec: 5.0,
+    pauseAfterSec: 3.2,
+    text: 'There was a beginning. Matter. Energy. Gravity. Light.',
     tone: 'monumental',
   },
   {
     id: 'p-3',
     chapterId: 'prologue',
-    start: 17.3,
-    end: 24.7,
-    text: 'Stars that would burn for billions of years. Galaxies separated by distances the human mind would struggle to comprehend.',
+    durationSec: 5.6,
+    pauseAfterSec: 3.2,
+    text: 'Stars ignited for billions of years. Galaxies drifted through the dark.',
     tone: 'monumental',
   },
   {
     id: 'p-4',
     chapterId: 'prologue',
-    start: 25.0,
-    end: 32.4,
-    text: 'Worlds would form. Worlds would disappear. And somewhere, among all those possibilities, a rather interesting thing happened.',
-    tone: 'monumental',
+    durationSec: 4.8,
+    pauseAfterSec: 3.0,
+    text: 'Worlds rose and vanished—until the cosmos learned to make life.',
+    tone: 'warm',
   },
   {
     id: 'p-5',
     chapterId: 'prologue',
-    start: 32.7,
-    end: 35.4,
-    text: 'The universe became capable of producing life.',
-    tone: 'warm',
+    durationSec: 5.0,
+    pauseAfterSec: 2.6,
+    text: 'I have witnessed supernovas, black holes, and colliding galaxies.',
+    tone: 'monumental',
   },
   {
     id: 'p-6',
     chapterId: 'prologue',
-    start: 35.8,
-    end: 48.0,
-    text: 'Now, I have witnessed quite a lot in my existence. Explosions powerful enough to create stars. Black holes capable of swallowing light itself. Galaxies performing their magnificent celestial dances.',
-    tone: 'monumental',
-  },
-  {
-    id: 'p-7',
-    chapterId: 'prologue',
-    start: 48.3,
-    end: 54.6,
-    text: 'But I must admit... some of my most interesting creations turned out to be considerably smaller.',
+    durationSec: 5.2,
+    pauseAfterSec: 2.2,
+    text: 'I have sculpted wonders. Yet my finest creations turned out human.',
     tone: 'playful',
   },
 
-  // CHAPTER I — A LITTLE PLANET, A BIG STORY (00:55–01:50)
+  // CHAPTER I — A LITTLE PLANET, A BIG STORY (00:55–01:50; deliberate 3.0–3.6s pauses)
   {
     id: 'c1-1',
     chapterId: 'chapter-1',
-    start: 55.6,
-    end: 60.9,
-    text: 'Now, let us visit one of my favourite little arrangements. A planet called Earth.',
+    anchorStartSec: 56.4,
+    durationSec: 4.4,
+    pauseAfterSec: 3.0,
+    text: 'Visit one of my favourite worlds. Earth.',
     tone: 'warm',
   },
   {
     id: 'c1-2',
     chapterId: 'chapter-1',
-    start: 61.3,
-    end: 76.5,
-    text: 'An interesting place, really. A world that spins at roughly 1,670 kilometres per hour at its equator, travels around its star at approximately 107,000 kilometres per hour, and somehow manages to convince its inhabitants that everything is standing perfectly still.',
+    durationSec: 7.8,
+    pauseAfterSec: 3.2,
+    text: 'Spinning at 1,670 kilometres an hour, racing at 107,000—yet convincing everyone it stands still.',
     tone: 'playful',
   },
   {
     id: 'c1-3',
     chapterId: 'chapter-1',
-    start: 76.8,
-    end: 78.2,
-    text: 'Quite the illusion.',
-    tone: 'playful',
+    durationSec: 5.2,
+    pauseAfterSec: 3.4,
+    text: 'On Monday, 25 November 2002, Earth kept its quiet rhythm.',
+    tone: 'warm',
   },
   {
     id: 'c1-4',
     chapterId: 'chapter-1',
-    start: 78.5,
-    end: 84.8,
-    text: 'And on one particular day... Monday, the twenty-fifth of November, 2002... Earth continued its usual business.',
+    durationSec: 6.4,
+    pauseAfterSec: 3.6,
+    text: 'A waning gibbous Moon shone seventy-two percent bright. Dawn gave Hyderabad eleven hours of light.',
     tone: 'warm',
   },
   {
     id: 'c1-5',
     chapterId: 'chapter-1',
-    start: 85.1,
-    end: 93.8,
-    text: 'The Moon stood in its waning gibbous phase, roughly seventy-two percent illuminated. The Sun rose over Hyderabad, bringing around eleven hours of daylight.',
-    tone: 'warm',
+    durationSec: 4.6,
+    pauseAfterSec: 3.0,
+    text: 'Nothing exploded. No galaxies paused. A new human simply arrived.',
+    tone: 'quiet',
   },
   {
     id: 'c1-6',
     chapterId: 'chapter-1',
-    start: 94.2,
-    end: 100.0,
-    text: 'The day unfolded. Somewhere, people went about their ordinary lives. And a new human arrived.',
-    tone: 'warm',
-  },
-  {
-    id: 'c1-7',
-    chapterId: 'chapter-1',
-    start: 100.3,
-    end: 105.1,
-    text: 'Nothing exploded. No stars changed their orbits. No galaxies stopped to applaud.',
-    tone: 'quiet',
-  },
-  {
-    id: 'c1-8',
-    chapterId: 'chapter-1',
-    start: 105.4,
-    end: 109.6,
-    text: 'But something had changed. A new possibility had entered the story.',
+    durationSec: 4.4,
+    pauseAfterSec: 2.6,
+    text: 'And quietly, a rare possibility entered the story.',
     tone: 'warm',
   },
 
@@ -206,295 +309,195 @@ export const SCREENPLAY_LINES: NarrationLine[] = [
   {
     id: 'c2-1',
     chapterId: 'chapter-2',
-    start: 110.6,
-    end: 114.5,
-    text: 'Now, studying this particular human has presented me with a few interesting observations.',
+    anchorStartSec: 111.6,
+    durationSec: 4.2,
+    pauseAfterSec: 2.8,
+    text: 'Watching her unfold has offered delightful surprises.',
     tone: 'playful',
   },
   {
     id: 'c2-2',
     chapterId: 'chapter-2',
-    start: 114.9,
-    end: 122.6,
-    text: "First, her physical dimensions. Let's just say... she has discovered an impressive way of fitting an unreasonable amount of ambition into a rather compact arrangement.",
+    durationSec: 5.6,
+    pauseAfterSec: 2.8,
+    text: 'First, the fire she carries—warmth, drive, and ambition in one person.',
     tone: 'playful',
   },
   {
     id: 'c2-3',
     chapterId: 'chapter-2',
-    start: 122.9,
-    end: 124.5,
-    text: 'A remarkable engineering achievement.',
+    durationSec: 6.8,
+    pauseAfterSec: 2.8,
+    text: "Her mind is relentless. She sees good, thinks 'Could be better,' and makes it better.",
     tone: 'playful',
   },
   {
     id: 'c2-4',
     chapterId: 'chapter-2',
-    start: 124.8,
-    end: 127.2,
-    text: 'Secondly, her mind. Curious. Capable. Determined.',
-    tone: 'warm',
+    durationSec: 4.8,
+    pauseAfterSec: 2.8,
+    text: 'Honestly, it is exhausting to watch—even for an expanding universe.',
+    tone: 'playful',
   },
   {
     id: 'c2-5',
     chapterId: 'chapter-2',
-    start: 127.5,
-    end: 134.4,
-    text: "She has this peculiar habit of looking at something perfectly acceptable and thinking... 'Could be better.' And then proceeding to make it better.",
-    tone: 'playful',
+    durationSec: 5.6,
+    pauseAfterSec: 2.8,
+    text: 'She listens. She guides people home. A gifted therapist, among many things.',
+    tone: 'warm',
   },
   {
     id: 'c2-6',
     chapterId: 'chapter-2',
-    start: 134.7,
-    end: 140.3,
-    text: 'Which, frankly, is quite exhausting to observe from a universe that has already been expanding for billions of years.',
+    durationSec: 6.0,
+    pauseAfterSec: 3.0,
+    text: 'Beyond titles: games, cinema, music, sharp sarcasm, and mysteries I leave unsolved.',
     tone: 'playful',
   },
   {
     id: 'c2-7',
     chapterId: 'chapter-2',
-    start: 140.6,
-    end: 145.5,
-    text: 'She helps people understand themselves. She listens. She guides. She encourages them to move forward.',
-    tone: 'warm',
-  },
-  {
-    id: 'c2-8',
-    chapterId: 'chapter-2',
-    start: 145.9,
-    end: 149.7,
-    text: 'A therapist, among other things. And apparently, an excellent one at that.',
-    tone: 'warm',
-  },
-  {
-    id: 'c2-9',
-    chapterId: 'chapter-2',
-    start: 150.0,
-    end: 156.2,
-    text: "But don't let the professional description fool you. There are also games. Movies. Music. An impressive collection of sarcasm.",
-    tone: 'playful',
-  },
-  {
-    id: 'c2-10',
-    chapterId: 'chapter-2',
-    start: 156.5,
-    end: 163.4,
-    text: 'And occasional moments of childish behaviour that I shall respectfully decline to investigate further. Some mysteries, even I, prefer to leave unsolved.',
-    tone: 'playful',
-  },
-  {
-    id: 'c2-11',
-    chapterId: 'chapter-2',
-    start: 163.7,
-    end: 168.2,
-    text: "She doesn't do extraordinary things because she expects admiration. She does them because she can.",
+    durationSec: 6.2,
+    pauseAfterSec: 2.8,
+    text: "She doesn't chase applause. She simply sees what can be done—and does it.",
     tone: 'monumental',
-  },
-  {
-    id: 'c2-12',
-    chapterId: 'chapter-2',
-    start: 168.6,
-    end: 174.6,
-    text: 'No grand announcement. No requirement for applause. Just an instinct to see what can be done... and then do it.',
-    tone: 'warm',
   },
 
   // CHAPTER III — THE INVISIBLE GRAVITY (02:55–03:45)
   {
     id: 'c3-1',
     chapterId: 'chapter-3',
-    start: 175.6,
-    end: 178.1,
-    text: 'You see, not every force announces itself.',
-    tone: 'warm',
+    anchorStartSec: 176.4,
+    durationSec: 6.2,
+    pauseAfterSec: 3.0,
+    text: "Not every force announces itself. Gravity doesn't ask applause before holding galaxies together.",
+    tone: 'monumental',
   },
   {
     id: 'c3-2',
     chapterId: 'chapter-3',
-    start: 178.5,
-    end: 185.8,
-    text: "Gravity doesn't need applause to hold galaxies together. Light doesn't ask whether anyone is watching before it illuminates a world.",
-    tone: 'monumental',
+    durationSec: 5.2,
+    pauseAfterSec: 3.0,
+    text: 'Some people never see how far their quietest kindness travels.',
+    tone: 'warm',
   },
   {
     id: 'c3-3',
     chapterId: 'chapter-3',
-    start: 186.2,
-    end: 190.9,
-    text: "And some people... they don't even realize how far their smallest actions travel.",
+    durationSec: 7.4,
+    pauseAfterSec: 3.2,
+    text: 'A moment of patience. The right words at the right hour. Somewhere, someone dares to try again.',
     tone: 'warm',
   },
   {
     id: 'c3-4',
     chapterId: 'chapter-3',
-    start: 191.2,
-    end: 198.3,
-    text: 'A conversation. A little encouragement. A moment of patience. A few words spoken at precisely the right time.',
-    tone: 'warm',
+    durationSec: 5.4,
+    pauseAfterSec: 3.0,
+    text: 'And she? Already moving on—perfecting a detail nobody else noticed.',
+    tone: 'playful',
   },
   {
     id: 'c3-5',
     chapterId: 'chapter-3',
-    start: 198.6,
-    end: 208.3,
-    text: 'They may seem insignificant to the person giving them. But somewhere, someone remembers. Someone stands a little taller. Someone finds the courage to try again.',
-    tone: 'warm',
-  },
-  {
-    id: 'c3-6',
-    chapterId: 'chapter-3',
-    start: 208.7,
-    end: 215.7,
-    text: 'And the person responsible? Probably already busy with something else. Possibly correcting an imperfection nobody else even noticed.',
-    tone: 'playful',
-  },
-  {
-    id: 'c3-7',
-    chapterId: 'chapter-3',
-    start: 216.1,
-    end: 224.6,
-    text: "Perhaps that's the strange beauty of existence. You never really know how many little universes you've changed just by being part of your own.",
+    durationSec: 6.8,
+    pauseAfterSec: 2.8,
+    text: "You never know how many universes you shift simply by living your own.",
     tone: 'monumental',
   },
 
-  // CHAPTER IV — TWO HALVES OF A STRANGE EQUILIBRIUM (03:45–04:45)
+  // CHAPTER IV — TWO HALVES OF A STRANGE EQUILIBRIUM (03:45–04:45; deliberate 3.2–3.8s pauses)
   {
     id: 'c4-1',
     chapterId: 'chapter-4',
-    start: 225.6,
-    end: 229.2,
-    text: 'Of course, balance is another rather fascinating subject.',
+    anchorStartSec: 226.4,
+    durationSec: 4.4,
+    pauseAfterSec: 3.2,
+    text: 'Then comes the quiet miracle of two orbits finding each other.',
     tone: 'monumental',
   },
   {
     id: 'c4-2',
     chapterId: 'chapter-4',
-    start: 229.5,
-    end: 233.5,
-    text: 'Consider two forces. One, precise. Structured. Deliberate.',
-    tone: 'monumental',
+    durationSec: 5.0,
+    pauseAfterSec: 3.4,
+    text: 'One of you: precise, structured, five steps ahead with a plan.',
+    tone: 'warm',
   },
   {
     id: 'c4-3',
     chapterId: 'chapter-4',
-    start: 233.9,
-    end: 238.6,
-    text: 'The other, imperfect. Unpredictable. Occasionally questionable in its decision-making.',
+    durationSec: 5.4,
+    pauseAfterSec: 3.6,
+    text: 'The other: imperfect, improvising, making questionable choices with great confidence.',
     tone: 'playful',
   },
   {
     id: 'c4-4',
     chapterId: 'chapter-4',
-    start: 238.9,
-    end: 246.9,
-    text: 'One seems to have a plan for everything. The other appears to be making the plan up along the way.',
-    tone: 'playful',
+    durationSec: 5.2,
+    pauseAfterSec: 3.8,
+    text: 'Perfection without spontaneity turns still. Chaos without direction loses its way.',
+    tone: 'monumental',
   },
   {
     id: 'c4-5',
     chapterId: 'chapter-4',
-    start: 247.3,
-    end: 250.3,
-    text: 'And yet... neither is without its purpose.',
+    durationSec: 5.8,
+    pauseAfterSec: 3.6,
+    text: "Opposites don't have to compete. Two rhythms simply make room for each other.",
     tone: 'warm',
   },
   {
     id: 'c4-6',
     chapterId: 'chapter-4',
-    start: 250.7,
-    end: 257.2,
-    text: 'Because perfection without spontaneity can become stillness. And chaos without direction can become confusion.',
-    tone: 'monumental',
-  },
-  {
-    id: 'c4-7',
-    chapterId: 'chapter-4',
-    start: 257.6,
-    end: 267.6,
-    text: "The universe has always understood something rather important. Opposites don't necessarily have to compete. Sometimes, they simply make room for one another.",
-    tone: 'warm',
-  },
-  {
-    id: 'c4-8',
-    chapterId: 'chapter-4',
-    start: 268.0,
-    end: 274.7,
-    text: 'Two different ways of existing. Two different rhythms. And somehow, a rather beautiful equilibrium.',
-    tone: 'warm',
-  },
-  {
-    id: 'c4-9',
-    chapterId: 'chapter-4',
-    start: 275.0,
-    end: 284.6,
-    text: 'And perhaps the most interesting part of all... is that neither side needs to become the other. They only need to be themselves.',
+    durationSec: 6.8,
+    pauseAfterSec: 3.2,
+    text: 'Neither needed to become the other. Only stay true—and keep orbiting together.',
     tone: 'warm',
   },
 
-  // CHAPTER V — EVEN STARS HAVE QUIET HOURS (04:45–05:35)
+  // CHAPTER V — EVEN STARS HAVE QUIET HOURS (04:45–05:35; deliberate 3.4–3.8s breathing pauses)
   {
     id: 'c5-1',
     chapterId: 'chapter-5',
-    start: 285.6,
-    end: 287.6,
-    text: 'Now... there is something else worth remembering.',
+    anchorStartSec: 286.6,
+    durationSec: 5.4,
+    pauseAfterSec: 3.6,
+    text: "I've been expanding for 13.8 billion years. Even I wouldn't try that without a pause.",
     tone: 'quiet',
   },
   {
     id: 'c5-2',
     chapterId: 'chapter-5',
-    start: 287.9,
-    end: 293.3,
-    text: "I have been expanding for approximately 13.8 billion years. And even I wouldn't recommend attempting that without a few pauses.",
+    durationSec: 6.4,
+    pauseAfterSec: 3.8,
+    text: 'Yet humans push themselves to keep going. To achieve. To help. To become more.',
     tone: 'quiet',
   },
   {
     id: 'c5-3',
     chapterId: 'chapter-5',
-    start: 293.6,
-    end: 302.2,
-    text: 'Yet humans... humans have developed an extraordinary habit of expecting themselves to keep going. To improve. To achieve. To understand. To help. To become something more than they were yesterday.',
+    durationSec: 5.8,
+    pauseAfterSec: 3.8,
+    text: "Listen. You don't have to turn every day into an achievement, or hold every answer.",
     tone: 'quiet',
   },
   {
     id: 'c5-4',
     chapterId: 'chapter-5',
-    start: 302.5,
-    end: 305.0,
-    text: 'And some seem particularly determined to do all of it.',
-    tone: 'quiet',
+    durationSec: 5.2,
+    pauseAfterSec: 3.4,
+    text: 'Some days are for progress. Some are for doing nothing at all. Even stars rest.',
+    tone: 'warm',
   },
   {
     id: 'c5-5',
     chapterId: 'chapter-5',
-    start: 305.3,
-    end: 312.8,
-    text: "But listen. You don't have to turn every day into an achievement. You don't have to solve every problem. You don't have to be the person with all the answers.",
-    tone: 'quiet',
-  },
-  {
-    id: 'c5-6',
-    chapterId: 'chapter-5',
-    start: 313.2,
-    end: 318.4,
-    text: 'There are days meant for progress. And there are days meant for doing absolutely nothing. Both are part of being alive.',
-    tone: 'quiet',
-  },
-  {
-    id: 'c5-7',
-    chapterId: 'chapter-5',
-    start: 318.8,
-    end: 324.8,
-    text: 'Even the stars have their own lifetimes. Even galaxies change. And nobody has ever accused the universe of being lazy for taking its time.',
-    tone: 'warm',
-  },
-  {
-    id: 'c5-8',
-    chapterId: 'chapter-5',
-    start: 325.2,
-    end: 334.7,
-    text: 'So perhaps... a little rest is not such a terrible idea. I hope the people who spend their time helping others remember that they deserve kindness too. Not because of what they do. Simply because they exist.',
+    durationSec: 6.4,
+    pauseAfterSec: 2.6,
+    text: 'I hope those who care for everyone remember they deserve gentleness—simply for existing.',
     tone: 'warm',
   },
 
@@ -502,82 +505,82 @@ export const SCREENPLAY_LINES: NarrationLine[] = [
   {
     id: 'f-1',
     chapterId: 'final-chapter',
-    start: 335.6,
-    end: 342.0,
-    text: 'So... after all those galaxies. All those stars. All that time. All those extraordinary arrangements of matter and energy...',
+    anchorStartSec: 336.8,
+    durationSec: 5.4,
+    pauseAfterSec: 2.6,
+    text: 'So after all those galaxies, all those stars, all that time...',
     tone: 'monumental',
   },
   {
     id: 'f-2',
     chapterId: 'final-chapter',
-    start: 342.3,
-    end: 344.8,
-    text: 'There is one little existence worth celebrating today.',
+    durationSec: 6.2,
+    pauseAfterSec: 2.6,
+    text: 'There is one extraordinary mind that refuses to settle, one heart that changes the room.',
     tone: 'climax',
   },
   {
     id: 'f-3',
     chapterId: 'final-chapter',
-    start: 345.1,
-    end: 353.6,
-    text: 'One human. A mind that refuses to settle. A heart that finds ways to make a difference. A spirit that keeps discovering new reasons to move forward.',
-    tone: 'climax',
+    durationSec: 4.6,
+    pauseAfterSec: 2.0,
+    text: 'A little mischief. A little brilliance. Far more sarcasm than I planned.',
+    tone: 'playful',
   },
   {
     id: 'f-4',
     chapterId: 'final-chapter',
-    start: 353.9,
-    end: 359.8,
-    text: 'A little mischief. A little madness. And quite possibly, more sarcasm than the universe was prepared to accommodate.',
-    tone: 'playful',
-  },
-  {
-    id: 'f-5',
-    chapterId: 'final-chapter',
-    start: 360.1,
-    end: 364.7,
-    text: "I have seen countless wonders. But I think I'll make an exception for this one.",
+    durationSec: 4.4,
+    pauseAfterSec: 6.9, // 364.6 + 6.9 = 371.5s (Sacred Silence 365.0..370.5 + 1.0s burst -> ISHA reveal)
+    text: "I have seen countless wonders. I'll gladly make an exception for this one.",
     tone: 'climax',
   },
   // 365.0–370.5: Complete cosmic silence — one star remains.
-  // 371.5: ISHA constellation reveal!
+  // 371.5: ISHA constellation reveal & "Happy Birthday, Isha." immediately together!
+  // Followed by the 24-orbit / 22.5B km orbital statistics as a warm coda at 378.8s.
   {
     id: 'f-6',
     chapterId: 'final-chapter',
-    start: 372.4,
-    end: 381.5,
-    text: "Twenty-four journeys around a star. Approximately 22.5 billion kilometres travelled along Earth's orbit. And somehow, the journey is only getting started.",
-    tone: 'warm',
+    anchorStartSec: BIRTHDAY_REVEAL_TIME, // 371.5s — immediately at the ISHA reveal
+    durationSec: 4.5,
+    pauseAfterSec: 2.8,
+    text: 'From this rather enormous universe... Happy Birthday, Isha.',
+    tone: 'climax',
     containsReveal: true,
+    sequenceRole: 'reveal-greeting',
   },
   {
     id: 'f-7',
     chapterId: 'final-chapter',
-    start: 381.8,
-    end: 385.7,
-    text: 'So, from this rather enormous universe... Happy Birthday, Isha.',
-    tone: 'climax',
+    anchorStartSec: ORBITAL_CODA_TIME, // 378.8s — warm post-reveal statistical coda
+    durationSec: 6.2,
+    pauseAfterSec: 2.6,
+    text: "Twenty-four journeys around a star. 22.5 billion kilometres—and your story is only beginning.",
+    tone: 'warm',
     containsReveal: true,
+    sequenceRole: 'post-reveal-coda',
   },
   {
     id: 'f-8',
     chapterId: 'final-chapter',
-    start: 386.1,
-    end: 393.0,
-    text: 'Keep being curious. Keep being wonderfully stubborn. Keep exploring. Keep laughing. Keep playing. Keep becoming.',
+    durationSec: 5.0,
+    pauseAfterSec: 2.4,
+    text: 'Keep being curious. Keep laughing. Keep exploring. Keep becoming.',
     tone: 'warm',
     containsReveal: true,
   },
   {
     id: 'f-9',
     chapterId: 'final-chapter',
-    start: 393.4,
-    end: 403.5,
-    text: 'And whenever you need to... remember that you are allowed to simply be. The universe has plenty of time. And today... it is celebrating you.',
+    durationSec: 6.6,
+    pauseAfterSec: 0,
+    text: 'Remember, you are allowed to simply be. Today, the universe celebrates you.',
     tone: 'warm',
     containsReveal: true,
   },
 ];
+
+export const SCREENPLAY_LINES: NarrationLine[] = buildTimedScreenplay(SCREENPLAY_BEATS);
 
 export const FINAL_POSTSCRIPT =
   'P.S. The universe has reviewed your performance. Expectations remain unreasonably high. Please continue being you.';
@@ -585,7 +588,7 @@ export const FINAL_POSTSCRIPT =
 export function getActiveNarrationLine(timeSec: number): NarrationLine | null {
   for (let i = 0; i < SCREENPLAY_LINES.length; i++) {
     const line = SCREENPLAY_LINES[i];
-    if (timeSec >= line.start && timeSec <= line.end) {
+    if (line && timeSec >= line.start && timeSec <= line.end) {
       return line;
     }
   }
@@ -599,7 +602,7 @@ export function getActiveFacts(timeSec: number): AstronomicalFact[] {
 export function getActiveTrait(timeSec: number): ConstellationTrait | null {
   for (let i = 0; i < CONSTELLATION_TRAITS.length; i++) {
     const trait = CONSTELLATION_TRAITS[i];
-    if (timeSec >= trait.start && timeSec <= trait.end) {
+    if (trait && timeSec >= trait.start && timeSec <= trait.end) {
       return trait;
     }
   }
@@ -618,4 +621,103 @@ export function getSpoilerSafeTranscript(
     ...line,
     locked: Boolean(line.containsReveal && !unlocked),
   }));
+}
+
+export type FinalSequencePhase =
+  | 'pre-reveal'
+  | 'silence'
+  | 'birthday-reveal'
+  | 'statistical-coda'
+  | 'closing-blessing';
+
+/**
+ * Resolves the narrative beat phase for the Final Chapter reveal sequence:
+ * Sacred Silence (365..370.5s) -> immediate Happy Birthday, Isha reveal at 371.5s ->
+ * warm orbital statistics coda at 378.8s -> closing birthday blessing.
+ */
+export function getFinalSequencePhase(timeSec: number): FinalSequencePhase {
+  if (timeSec < SILENCE_START) return 'pre-reveal';
+  if (timeSec < SILENCE_END) return 'silence';
+  if (timeSec < TITLE_REVEAL_TIME) return 'pre-reveal';
+  if (timeSec < ORBITAL_CODA_TIME) return 'birthday-reveal';
+  const codaLine = SCREENPLAY_LINES.find((l) => l.sequenceRole === 'post-reveal-coda');
+  const codaEnd = codaLine ? codaLine.end : ORBITAL_CODA_TIME + 6.2;
+  if (timeSec <= codaEnd + 1.5) return 'statistical-coda';
+  return 'closing-blessing';
+}
+
+/**
+ * Pure screenplay pacing metrics used by automated tests to verify trimmed narration
+ * length, natural cinematic WPM, and chapter-level inter-cue breathing pauses.
+ */
+export function analyzeScreenplayPacing(
+  lines: readonly NarrationLine[] = SCREENPLAY_LINES,
+): ScreenplayPacingSummary {
+  const chapterIds: ChapterId[] = [
+    'prologue',
+    'chapter-1',
+    'chapter-2',
+    'chapter-3',
+    'chapter-4',
+    'chapter-5',
+    'final-chapter',
+  ];
+
+  const grouped = new Map<ChapterId, NarrationLine[]>();
+  for (const id of chapterIds) {
+    grouped.set(id, []);
+  }
+
+  let totalWords = 0;
+  let totalSpokenSec = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    totalWords += countWords(line.text);
+    totalSpokenSec += Math.max(0, line.end - line.start);
+    grouped.get(line.chapterId)?.push(line);
+  }
+
+  const byChapter = {} as Record<ChapterId, ChapterPacingStats>;
+  for (const id of chapterIds) {
+    const chLines = grouped.get(id) ?? [];
+    const gapsSec: number[] = [];
+    let chWords = 0;
+    let chSpoken = 0;
+
+    for (let i = 0; i < chLines.length; i++) {
+      const cur = chLines[i];
+      if (!cur) continue;
+      chWords += countWords(cur.text);
+      chSpoken += Math.max(0, cur.end - cur.start);
+      if (i > 0) {
+        const prev = chLines[i - 1];
+        if (prev) {
+          gapsSec.push(roundTenth(cur.start - prev.end));
+        }
+      }
+    }
+
+    byChapter[id] = {
+      lineCount: chLines.length,
+      wordCount: chWords,
+      spokenSec: roundTenth(chSpoken),
+      gapsSec,
+      minGapSec: gapsSec.length > 0 ? Math.min(...gapsSec) : 0,
+      maxGapSec: gapsSec.length > 0 ? Math.max(...gapsSec) : 0,
+    };
+  }
+
+  const roundedSpoken = roundTenth(totalSpokenSec);
+  const averageWpm =
+    roundedSpoken > 0 ? Math.round((totalWords / (roundedSpoken / 60)) * 10) / 10 : 0;
+
+  return {
+    totalLines: lines.length,
+    totalWords,
+    totalSpokenSec: roundedSpoken,
+    averageWpm,
+    byChapter,
+  };
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { SCREENPLAY_LINES } from '../data/screenplay';
 import { computeSyncedSpeechPlan, estimateBaseSpeechDuration } from './voiceSync';
 

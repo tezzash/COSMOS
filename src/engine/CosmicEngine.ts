@@ -14,11 +14,15 @@ import {
   getChapterAtTime,
   smoothstep,
 } from '../data/chapters';
+import { getActiveNarrationLine } from '../data/screenplay';
 import { CameraDirector } from './CameraDirector';
-import { CHROMATIC_ABERRATION_SHADER } from './chromaticAberrationPass';
 import { CINEMA_OPTICS_SHADER, createLensDustTexture } from './cinemaPass';
 import { computeCinemaPresentation } from './cinemaPresentation';
 import { computeChapterLutWeights } from './colorGrading';
+import {
+  computeInteractiveFieldInfluence,
+  computeNarrationCosmicReactivity,
+} from './dynamicNebulaField';
 import { GpgpuCosmicFluid } from './gpgpuParticles';
 import {
   type GravitationalLensState,
@@ -32,7 +36,12 @@ import {
   computeBloomParams,
   computeCinemaOptics,
 } from './parallax';
-import { CelestialEquilibrium } from './scenes/CelestialEquilibrium';
+import {
+  type RenderPipelineMode,
+  probeGpuRenderCapabilities,
+  selectRenderPipelinePlan,
+} from './renderCapabilities';
+import { CosmicYinYangFormation } from './scenes/CosmicYinYangFormation';
 import { ConstellationFigure } from './scenes/ConstellationFigure';
 import { ConstellationNetwork } from './scenes/ConstellationNetwork';
 import { CosmicDriftField } from './scenes/CosmicDriftField';
@@ -41,13 +50,6 @@ import { EarthSequence } from './scenes/EarthSequence';
 import { QuietHoursSequence } from './scenes/QuietHoursSequence';
 import { StellarNucleosynthesis } from './scenes/StellarNucleosynthesis';
 import { TitleReveal } from './scenes/TitleReveal';
-import {
-  type TaaJitterOffset,
-  computeTaaBlendFactor,
-  computeTaaJitter,
-} from './taa';
-import { TaaResolvePass } from './taaPass';
-import { ShutterMotionBlurPass, VelocityBufferRenderer } from './velocityPass';
 
 export interface EngineCallbacks {
   onTimeUpdate: (timeSec: number, connectionCount: number, birthStarLaunched: boolean) => void;
@@ -70,6 +72,8 @@ const _prevCameraPos = new THREE.Vector3();
 const _instCameraVel = new THREE.Vector3();
 const _smoothCameraVel = new THREE.Vector3();
 const _smoothedPointer = new THREE.Vector2();
+const _prevPointerNdc = new THREE.Vector2();
+const _pointerVelNdc = new THREE.Vector2();
 const _projWorldPos = new THREE.Vector3();
 const _parallaxInput: ParallaxInput = {
   cameraPos: { x: 0, y: 0, z: 0 },
@@ -77,30 +81,10 @@ const _parallaxInput: ParallaxInput = {
   pointerOffset: { x: 0, y: 0 },
 };
 const _parallaxOptions: ParallaxOptions = {
-  reducedMotion: false,
+  reducedMotion: true,
   silenceDamp: 1,
 };
-const _taaJitter: TaaJitterOffset = {
-  pixelX: 0,
-  pixelY: 0,
-  ndcX: 0,
-  ndcY: 0,
-};
 
-function detectSoftwareGl(): boolean {
-  try {
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-    if (!gl) return true;
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-    const gpu = String(gl.getParameter(param) ?? '');
-    gl.getExtension('WEBGL_lose_context')?.loseContext();
-    return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-  } catch {
-    return true;
-  }
-}
 
 export function isWebGLAvailable(): boolean {
   try {
@@ -121,23 +105,21 @@ export class CosmicEngine {
   private readonly isMobile: boolean;
 
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly composerRT: THREE.WebGLRenderTarget;
-  private readonly composer: EffectComposer;
-  private readonly velocityBuffer: VelocityBufferRenderer;
-  private readonly taaPass: TaaResolvePass;
-  private readonly shutterBlurPass: ShutterMotionBlurPass;
-  private readonly bloomPass: UnrealBloomPass;
-  private readonly gravitationalLensPass: GravitationalLensPass;
-  private readonly cinemaPass: ShaderPass;
-  private readonly lensDustTex: THREE.CanvasTexture;
-  private readonly chromaticPass: ShaderPass;
-  private readonly lutPass: LutColorGradePass;
+  private renderMode: RenderPipelineMode;
+  private composerRT: THREE.WebGLRenderTarget | null = null;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
+  private gravitationalLensPass: GravitationalLensPass | null = null;
+  private cinemaPass: ShaderPass | null = null;
+  private lensDustTex: THREE.CanvasTexture | null = null;
+  private lutPass: LutColorGradePass | null = null;
+
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly fog: THREE.FogExp2;
   private readonly keyLight: THREE.DirectionalLight;
   private readonly hemiLight: THREE.HemisphereLight;
-  private readonly envRT: THREE.WebGLRenderTarget;
+  private envRT: THREE.WebGLRenderTarget | null = null;
 
   private readonly cameraDirector = new CameraDirector();
   private readonly cosmicEnv: CosmicEnvironment;
@@ -146,17 +128,18 @@ export class CosmicEngine {
   private readonly earthSeq: EarthSequence;
   private readonly figureSeq: ConstellationFigure;
   private readonly networkSeq: ConstellationNetwork;
-  private readonly equilibriumSeq: CelestialEquilibrium;
+  private readonly yinYangSeq: CosmicYinYangFormation;
   private readonly quietSeq: QuietHoursSequence;
   private readonly revealSeq: TitleReveal;
   private readonly nucleosynthesis: StellarNucleosynthesis;
 
   private readonly pixelRatio: number;
+  private resizeObserver: ResizeObserver | null = null;
   private filmTime = 0;
   private elapsed = 0;
   private hasEntered = false;
   private isPlaying = false;
-  private reducedMotion = false;
+  private reducedMotion = true; // Project locked in serene, razor-sharp Calm Cinema Mode
   private cinemaMode = false;
   private completedFired = false;
 
@@ -164,14 +147,17 @@ export class CosmicEngine {
   private lastPerfTime = 0;
   private lastHudSync = 0;
   private cadenceAccumulator = 0;
-  private taaFrameIndex = 0;
-  private taaNeedsReset = true;
-  private lastTaaBlend = 0;
+  private frameCounter = 0;
+  private composerHealthChecksLeft = 4;
+  private composerLumaVerified = false;
+  private needsFirstFramePresent = true;
   private lastLutLabel = 'cosmosCool';
   private lastChapterIndex = 0;
   private chapterSeekWarpPulse = 0;
   private lastGravLensState: GravitationalLensState = computeChapterTransitionLens(0, 0);
   private syncedRevealMilkyWay = false;
+  private pointerPulseEnergy = 0;
+  private prefersReducedMotion = false;
   private disposed = false;
 
   constructor(
@@ -181,27 +167,44 @@ export class CosmicEngine {
   ) {
     this.container = container;
     this.callbacks = callbacks;
-    this.isSoftwareGl = detectSoftwareGl();
-    this.isMobile = window.innerWidth < 768;
+    this.isMobile =
+      window.innerWidth < 768 ||
+      (typeof navigator !== 'undefined' &&
+        /iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+    this.prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (initialState) {
       this.hasEntered = initialState.entered;
       this.isPlaying = initialState.entered;
       this.filmTime = clamp(initialState.timeSec, 0, FILM_DURATION);
     }
 
-    const width = container.clientWidth || window.innerWidth;
-    const height = container.clientHeight || window.innerHeight;
-    const pixelRatio = this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2);
-    this.pixelRatio = pixelRatio;
+    const width = Math.max(1, container.clientWidth || window.innerWidth);
+    const height = Math.max(1, container.clientHeight || window.innerHeight);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl,
+      antialias: !this.isMobile,
       powerPreference: 'high-performance',
     });
+
+    // Probe real GPU capabilities directly from this renderer's own WebGL context
+    // (zero wasted extra contexts; verifies HalfFloat FBO completeness before allocating)
+    const gpuCaps = probeGpuRenderCapabilities(
+      this.renderer,
+      this.isMobile,
+      window.devicePixelRatio || 1,
+    );
+    const plan = selectRenderPipelinePlan(gpuCaps);
+    this.isSoftwareGl = gpuCaps.isSoftwareGl;
+    this.renderMode = plan.mode;
+    this.pixelRatio = plan.pixelRatio;
+
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.82;
-    this.renderer.setPixelRatio(pixelRatio);
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(width, height);
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -216,12 +219,18 @@ export class CosmicEngine {
     this.fog = new THREE.FogExp2('#010206', 0.0044);
     this.scene.fog = this.fog;
 
-    // Restrained studio PBR reflections so brushed metals catch sharp highlights without flat wash
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
-    this.scene.environment = this.envRT.texture;
-    this.scene.environmentIntensity = 0.36;
-    pmrem.dispose();
+    // Restrained PBR environment map ONLY when HalfFloat FBOs are verified renderable
+    if (plan.usePmremEnv) {
+      try {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+        this.scene.environment = this.envRT.texture;
+        this.scene.environmentIntensity = 0.36;
+        pmrem.dispose();
+      } catch {
+        this.envRT = null;
+      }
+    }
 
     this.camera = new THREE.PerspectiveCamera(48, width / Math.max(1, height), 0.1, 900);
     this.camera.position.set(0, 0.3, 18);
@@ -240,17 +249,17 @@ export class CosmicEngine {
 
     const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
 
-    // Instantiate all continuous chapters + 100k+ GPGPU fluid simulation in one shared cosmic world
-    this.cosmicEnv = new CosmicEnvironment(this.isMobile, pixelRatio, maxAnisotropy);
-    this.cosmicDrift = new CosmicDriftField(this.isMobile, pixelRatio);
-    this.gpgpuFluid = new GpgpuCosmicFluid(this.isMobile, this.isSoftwareGl, pixelRatio);
+    // Instantiate all continuous chapters in one shared cosmic world
+    this.cosmicEnv = new CosmicEnvironment(this.isMobile, this.pixelRatio, maxAnisotropy);
+    this.cosmicDrift = new CosmicDriftField(this.isMobile, this.pixelRatio);
+    this.gpgpuFluid = new GpgpuCosmicFluid(this.isMobile, plan.useGpgpuFluid, this.pixelRatio);
     this.earthSeq = new EarthSequence(maxAnisotropy);
     this.figureSeq = new ConstellationFigure();
     this.networkSeq = new ConstellationNetwork(this.isMobile);
-    this.equilibriumSeq = new CelestialEquilibrium(this.isMobile, pixelRatio);
+    this.yinYangSeq = new CosmicYinYangFormation(this.isMobile, this.pixelRatio);
     this.quietSeq = new QuietHoursSequence(maxAnisotropy);
-    this.revealSeq = new TitleReveal(this.isMobile, pixelRatio);
-    this.nucleosynthesis = new StellarNucleosynthesis(this.isMobile, pixelRatio);
+    this.revealSeq = new TitleReveal(this.isMobile, this.pixelRatio);
+    this.nucleosynthesis = new StellarNucleosynthesis(this.isMobile, this.pixelRatio);
 
     this.scene.add(
       this.cosmicEnv.root,
@@ -259,65 +268,81 @@ export class CosmicEngine {
       this.earthSeq.root,
       this.figureSeq.root,
       this.networkSeq.root,
-      this.equilibriumSeq.root,
+      this.yinYangSeq.root,
       this.quietSeq.root,
       this.revealSeq.root,
       this.nucleosynthesis.root,
     );
-    this.renderer.domElement.dataset.chapter4Visual = 'celestial-equilibrium-figure8';
-    this.renderer.domElement.dataset.figure8Particles = String(this.equilibriumSeq.curlParticleCount);
+    this.renderer.domElement.dataset.chapter4Visual = 'cosmic-entity-yinyang';
+    this.renderer.domElement.dataset.yinyangStars = String(this.yinYangSeq.starCount);
+    this.renderer.domElement.dataset.yinyangNebulae = String(this.yinYangSeq.nebulaCount);
+    this.renderer.domElement.dataset.calmMode = 'true';
     this.renderer.domElement.dataset.cosmicDriftStars = String(this.cosmicDrift.starCount);
     this.renderer.domElement.dataset.nucleosynthesisParticles = String(
       this.nucleosynthesis.totalParticleCount,
     );
 
-    // 16-bit HalfFloat HDR Hollywood Studio Post-Processing Pipeline:
-    // Half-Res Velocity Buffer -> Render (Halton-jittered) -> Velocity-Reprojected TAA Resolve ->
-    // 180° Shutter Motion Blur -> Subtle HDR Bloom -> 70mm Cinema Optics (Lens Dust, Hex Ghosts,
-    // Shadow-Only Blue-Noise Grain, Focal Rack) -> Chromatic Aberration -> ACES Output ->
-    // 32×32×32 Chapter-Specific Kodak 2383 3D LUT Color Grade
-    const initialBloom = computeBloomParams(this.filmTime);
-    const aspect = width / Math.max(1, height);
-    const rtW = Math.max(1, Math.floor(width * pixelRatio));
-    const rtH = Math.max(1, Math.floor(height * pixelRatio));
-    this.velocityBuffer = new VelocityBufferRenderer(width, height, pixelRatio);
-    this.composerRT = new THREE.WebGLRenderTarget(rtW, rtH, {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      type: THREE.HalfFloatType,
-    });
-    this.composer = new EffectComposer(this.renderer, this.composerRT);
-    this.composer.setPixelRatio(pixelRatio);
-    this.composer.setSize(width, height);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.taaPass = new TaaResolvePass(width, height, pixelRatio, this.velocityBuffer.texture);
-    this.composer.addPass(this.taaPass);
-    this.shutterBlurPass = new ShutterMotionBlurPass(this.velocityBuffer.texture);
-    this.composer.addPass(this.shutterBlurPass);
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
-      initialBloom.strength,
-      initialBloom.radius,
-      initialBloom.threshold,
-    );
-    this.composer.addPass(this.bloomPass);
-    this.gravitationalLensPass = new GravitationalLensPass(aspect);
-    this.composer.addPass(this.gravitationalLensPass);
-    this.lensDustTex = createLensDustTexture(512);
-    this.cinemaPass = new ShaderPass(CINEMA_OPTICS_SHADER);
-    this.cinemaPass.uniforms.uAspect.value = aspect;
-    this.cinemaPass.uniforms.tLensDust.value = this.lensDustTex;
-    this.cinemaPass.uniforms.uHasLensDust.value = 1.0;
-    this.composer.addPass(this.cinemaPass);
-    this.chromaticPass = new ShaderPass(CHROMATIC_ABERRATION_SHADER);
-    this.chromaticPass.uniforms.uAspect.value = aspect;
-    this.composer.addPass(this.chromaticPass);
-    this.composer.addPass(new OutputPass());
-    this.lutPass = new LutColorGradePass();
-    this.composer.addPass(this.lutPass);
+    // Capability-aware post-processing pipeline:
+    // - hdr-composer: HalfFloat FBOs + UnrealBloom + GravitationalLens + 70mm Optics + ACES Output + 3D LUT
+    // - ldr-composer: Guaranteed-complete UnsignedByte FBOs + GravitationalLens + 70mm Optics + ACES Output (+ 3D LUT on WebGL2)
+    // - direct-renderer: Direct backbuffer draw (Software GL or runtime fallback)
+    if (this.renderMode !== 'direct-renderer') {
+      try {
+        const initialBloom = computeBloomParams(this.filmTime);
+        const aspect = width / Math.max(1, height);
+        const rtW = Math.max(1, Math.floor(width * this.pixelRatio));
+        const rtH = Math.max(1, Math.floor(height * this.pixelRatio));
+
+        this.composerRT = new THREE.WebGLRenderTarget(rtW, rtH, {
+          minFilter: THREE.LinearFilter,
+          magFilter: THREE.LinearFilter,
+          type:
+            plan.composerTextureType === 'half-float'
+              ? THREE.HalfFloatType
+              : THREE.UnsignedByteType,
+        });
+        this.composer = new EffectComposer(this.renderer, this.composerRT);
+        this.composer.setPixelRatio(this.pixelRatio);
+        this.composer.setSize(width, height);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+        if (plan.useBloom) {
+          this.bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(width, height),
+            initialBloom.strength * 0.72,
+            initialBloom.radius * 0.78,
+            Math.max(0.72, initialBloom.threshold),
+          );
+          this.composer.addPass(this.bloomPass);
+        }
+
+        this.gravitationalLensPass = new GravitationalLensPass(aspect);
+        this.composer.addPass(this.gravitationalLensPass);
+
+        this.lensDustTex = createLensDustTexture(512);
+        this.cinemaPass = new ShaderPass(CINEMA_OPTICS_SHADER);
+        this.cinemaPass.uniforms.uAspect!.value = aspect;
+        this.cinemaPass.uniforms.tLensDust!.value = this.lensDustTex;
+        this.cinemaPass.uniforms.uHasLensDust!.value = 1.0;
+        this.composer.addPass(this.cinemaPass);
+
+        this.composer.addPass(new OutputPass());
+
+        if (plan.useLut3d) {
+          this.lutPass = new LutColorGradePass();
+          this.composer.addPass(this.lutPass);
+        }
+      } catch {
+        this.fallbackToDirectRenderer();
+      }
+    }
 
     if (!this.isSoftwareGl) {
-      this.renderer.compile(this.scene, this.camera);
+      try {
+        this.renderer.compile(this.scene, this.camera);
+      } catch {
+        // Non-fatal pre-compile failure; shaders will still compile lazily on draw
+      }
     }
 
     if (this.hasEntered) {
@@ -331,11 +356,76 @@ export class CosmicEngine {
     this.tick();
   }
 
+  private fallbackToDirectRenderer(): void {
+    this.renderMode = 'direct-renderer';
+    this.composerHealthChecksLeft = 0;
+    this.composerLumaVerified = true;
+    this.renderer.setRenderTarget(null);
+  }
+
+  /**
+   * One-time startup sanity check after EffectComposer draws to the default backbuffer.
+   * Samples a small 16x16 patch at viewport center (where the luminous Guiding Star &
+   * Singularity/Earth sit during t < 220s). If every sampled channel is <= 3/255,
+   * the post-processing chain produced a driver-specific black frame and we immediately
+   * self-heal to direct-renderer so the viewer never sees a black screen.
+   */
+  private samplePatchMaxRgb(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    x: number,
+    y: number,
+    size: number,
+  ): number {
+    const buf = new Uint8Array(size * size * 4);
+    gl.readPixels(x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    let maxRgb = 0;
+    for (let i = 0; i < buf.length; i += 4) {
+      const r = buf[i] ?? 0;
+      const g = buf[i + 1] ?? 0;
+      const b = buf[i + 2] ?? 0;
+      if (r > maxRgb) maxRgb = r;
+      if (g > maxRgb) maxRgb = g;
+      if (b > maxRgb) maxRgb = b;
+      if (maxRgb > 8) return maxRgb;
+    }
+    return maxRgb;
+  }
+
+  private verifyComposerProducedPixels(gl: WebGLRenderingContext | WebGL2RenderingContext): boolean {
+    const drawW = gl.drawingBufferWidth;
+    const drawH = gl.drawingBufferHeight;
+    if (drawW < 64 || drawH < 64) {
+      return true;
+    }
+    try {
+      const centerSize = 64;
+      const cx = Math.max(0, Math.floor((drawW - centerSize) * 0.5));
+      const cy = Math.max(0, Math.floor((drawH - centerSize) * 0.5));
+      if (this.samplePatchMaxRgb(gl, cx, cy, centerSize) > 4) {
+        return true;
+      }
+      const sideSize = 32;
+      const sx = Math.max(0, Math.floor(drawW * 0.28));
+      const sy = Math.max(0, Math.floor(drawH * 0.36));
+      return this.samplePatchMaxRgb(gl, sx, sy, sideSize) > 4;
+    } catch {
+      return true;
+    }
+  }
+
   private bindEvents(): void {
     window.addEventListener('resize', this.handleResize);
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost);
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.handleResize();
+      });
+      this.resizeObserver.observe(this.container);
+    }
   }
 
   private handleContextLost = (e: Event): void => {
@@ -343,22 +433,35 @@ export class CosmicEngine {
     this.callbacks.onContextLost();
   };
 
+  private handleContextRestored = (): void => {
+    if (this.disposed) return;
+    this.composerHealthChecksLeft = 3;
+    this.needsFirstFramePresent = true;
+    this.handleResize();
+  };
+
   private handleResize = (): void => {
     if (this.disposed) return;
-    const w = this.container.clientWidth || window.innerWidth;
-    const h = this.container.clientHeight || window.innerHeight;
+    const w = Math.max(1, this.container.clientWidth || window.innerWidth);
+    const h = Math.max(1, this.container.clientHeight || window.innerHeight);
     const aspect = w / Math.max(1, h);
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    this.composer.setSize(w, h);
-    this.velocityBuffer.setSize(w, h, this.pixelRatio);
-    this.bloomPass.resolution.set(w, h);
-    this.gravitationalLensPass.setAspect(aspect);
-    this.cinemaPass.uniforms.uAspect.value = aspect;
-    this.chromaticPass.uniforms.uAspect.value = aspect;
-    this.taaNeedsReset = true;
-    this.taaPass.resetHistory();
+    if (this.composer) {
+      this.composer.setSize(w, h);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.resolution.set(w, h);
+    }
+    if (this.gravitationalLensPass) {
+      this.gravitationalLensPass.setAspect(aspect);
+    }
+    if (this.cinemaPass?.uniforms.uAspect) {
+      this.cinemaPass.uniforms.uAspect.value = aspect;
+    }
+    this.composerHealthChecksLeft = 2;
+    this.needsFirstFramePresent = true;
   };
 
   private updatePointerNdc(clientX: number, clientY: number): void {
@@ -387,6 +490,9 @@ export class CosmicEngine {
   private handlePointerDown = (e: PointerEvent): void => {
     if (!this.hasEntered) return;
     this.updatePointerNdc(e.clientX, e.clientY);
+    this.cameraDirector.setPointerOffset(_ndc.x, _ndc.y);
+    // Gentle luminous ripple through procedural nebulae & particle fields on click/tap
+    this.pointerPulseEnergy = Math.min(1, this.pointerPulseEnergy + 0.72);
 
     // Chapter I interactive birth star particle click/tap -> ignite Stellar Nucleosynthesis burst
     if (this.filmTime >= 75 && this.filmTime <= 109) {
@@ -394,7 +500,12 @@ export class CosmicEngine {
       const hits = _raycaster.intersectObject(this.earthSeq.interactiveStarHitbox, false);
       if (hits.length > 0 && this.earthSeq.triggerBirthStar()) {
         this.earthSeq.getBirthStarWorldPosition(_projWorldPos);
-        this.nucleosynthesis.spawnBurst([_projWorldPos.x, _projWorldPos.y, _projWorldPos.z], 0.76, 6.8, 5.2);
+        this.nucleosynthesis.spawnBurst(
+          [_projWorldPos.x, _projWorldPos.y, _projWorldPos.z],
+          0.76,
+          6.8,
+          5.2,
+        );
         this.callbacks.onBirthStarTriggered();
       }
     }
@@ -417,9 +528,7 @@ export class CosmicEngine {
     this.cameraDirector.snapToTime(this.camera, timeSec);
     _prevCameraPos.copy(this.camera.position);
     _smoothCameraVel.set(0, 0, 0);
-    this.taaNeedsReset = true;
-    this.taaPass.resetHistory();
-    this.velocityBuffer.resetHistory();
+    this.needsFirstFramePresent = true;
   }
 
   public enterUniverse(startAtTime = 0): void {
@@ -475,7 +584,12 @@ export class CosmicEngine {
     const ok = this.earthSeq.triggerBirthStar();
     if (ok) {
       this.earthSeq.getBirthStarWorldPosition(_projWorldPos);
-      this.nucleosynthesis.spawnBurst([_projWorldPos.x, _projWorldPos.y, _projWorldPos.z], 0.76, 6.8, 5.2);
+      this.nucleosynthesis.spawnBurst(
+        [_projWorldPos.x, _projWorldPos.y, _projWorldPos.z],
+        0.76,
+        6.8,
+        5.2,
+      );
       this.callbacks.onBirthStarTriggered();
       this.syncHud(true);
     }
@@ -495,7 +609,6 @@ export class CosmicEngine {
   private computeGuidingStarState(t: number): number {
     // One continuous luminous anchor star threading through every single act
     if (t < 55) {
-      // Emerges from Big Bang and glides toward Solar System
       const p = smoothstep(8, 55, t);
       _guidingTarget.set(
         THREE.MathUtils.lerp(0, -14, p),
@@ -505,7 +618,6 @@ export class CosmicEngine {
       return 1.6;
     }
     if (t < 110) {
-      // Orbits gently near Earth & rises toward Chapter II
       const p = smoothstep(55, 110, t);
       _guidingTarget.set(
         THREE.MathUtils.lerp(-14, 0, p),
@@ -515,30 +627,79 @@ export class CosmicEngine {
       return 1.35;
     }
     if (t < 175) {
-      // Rests at Kaus Media, the luminous heart of Sagittarius where bow and arrow meet
       _guidingTarget.set(1.55, 4.75, -174.62);
       return 1.35;
     }
     if (t < 225) {
-      // Becomes the pulsing gravitational origin of Chapter III
       _guidingTarget.set(0, 0, -255);
       return 2.1;
     }
     if (t < 285) {
-      // Bridges the center of the Yin-Yang harmonic S-curve
-      _guidingTarget.set(0, 0, -340);
-      return 1.65;
+      _guidingTarget.set(0, 0, -372);
+      return 0.16;
     }
     if (t < 335) {
-      // Hovers calmly outside the Chapter V sanctuary window like a quiet evening star
       _guidingTarget.set(3.2, 2.8, -428);
       return 1.25;
     }
-    // Final Chapter: settles dead-center in cosmic silence, then blossoms at the reveal
     _guidingTarget.set(0, 0, -515);
     const silenceHold = smoothstep(SILENCE_START - 1.5, SILENCE_START + 0.5, t);
     const postBurst = smoothstep(SILENCE_END, SILENCE_END + 3.2, t);
     return 1.8 + silenceHold * 1.6 - postBurst * 1.1;
+  }
+
+  private renderCurrentFrame(): void {
+    if (this.renderMode === 'direct-renderer' || !this.composer) {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    const gl = this.renderer.getContext();
+    const checkHealth = this.composerHealthChecksLeft > 0;
+    if (checkHealth) {
+      // Clear any pre-existing GL error before inspecting composer.render()
+      while (gl.getError() !== gl.NO_ERROR) {
+        // drain
+      }
+    }
+
+    try {
+      this.composer.render();
+    } catch {
+      this.fallbackToDirectRenderer();
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    if (checkHealth) {
+      this.composerHealthChecksLeft--;
+      let fatalGlError = false;
+      let err = gl.getError();
+      while (err !== gl.NO_ERROR) {
+        fatalGlError = true;
+        err = gl.getError();
+      }
+      if (fatalGlError) {
+        this.fallbackToDirectRenderer();
+        this.renderer.render(this.scene, this.camera);
+        return;
+      }
+
+      // On the final startup health check (when Prologue/Ch I-III visuals must be visible),
+      // confirm the post-processing chain actually emitted non-black pixels to the backbuffer.
+      if (
+        !this.composerLumaVerified &&
+        this.composerHealthChecksLeft === 0 &&
+        this.filmTime < 220
+      ) {
+        this.composerLumaVerified = true;
+        if (!this.verifyComposerProducedPixels(gl)) {
+          this.fallbackToDirectRenderer();
+          this.renderer.render(this.scene, this.camera);
+        }
+      }
+    }
   }
 
   private syncHud(force = false): void {
@@ -546,12 +707,10 @@ export class CosmicEngine {
     if (!force && now - this.lastHudSync < 120) return;
     this.lastHudSync = now;
     const canvas = this.renderer.domElement;
-    canvas.dataset.bloomStrength = this.bloomPass.strength.toFixed(2);
-    canvas.dataset.bloomThreshold = this.bloomPass.threshold.toFixed(2);
-    canvas.dataset.taaActive = this.isSoftwareGl ? 'software-fallback' : 'active';
-    canvas.dataset.taaBlend = this.lastTaaBlend.toFixed(2);
-    canvas.dataset.velocityBuffer = this.isSoftwareGl ? 'software-fallback' : 'half-res-active';
-    canvas.dataset.lutGrade = this.lastLutLabel;
+    canvas.dataset.renderMode = this.renderMode;
+    canvas.dataset.bloomStrength = this.bloomPass ? this.bloomPass.strength.toFixed(2) : '0.00';
+    canvas.dataset.bloomThreshold = this.bloomPass ? this.bloomPass.threshold.toFixed(2) : '1.00';
+    canvas.dataset.lutGrade = this.lutPass ? this.lastLutLabel : 'direct';
     canvas.dataset.hipparcosStars = String(this.cosmicEnv.getHipparcosStarCount());
     canvas.dataset.gpgpuParticles = String(this.gpgpuFluid.particleCount);
     canvas.dataset.cinemaMode = this.cinemaMode ? 'imax-24fps' : 'native';
@@ -559,15 +718,23 @@ export class CosmicEngine {
     canvas.dataset.debrisShift = this.cosmicEnv.getDebrisParallaxMagnitude().toFixed(2);
     const driftState = this.cosmicDrift.getState();
     canvas.dataset.cosmicDriftOpacity = driftState.opacity.toFixed(3);
-    canvas.dataset.cosmicDriftScroll = Math.hypot(driftState.scrollX, driftState.scrollY, driftState.scrollZ).toFixed(2);
+    canvas.dataset.cosmicDriftScroll = Math.hypot(
+      driftState.scrollX,
+      driftState.scrollY,
+      driftState.scrollZ,
+    ).toFixed(2);
     canvas.dataset.nucleosynthesisBursts = String(this.nucleosynthesis.getTotalSpawnedBursts());
     canvas.dataset.nucleosynthesisActive = String(this.nucleosynthesis.getActiveBurstCount());
     canvas.dataset.gravLensStrength = this.lastGravLensState.strength.toFixed(3);
     canvas.dataset.gravLensTransition = String(this.lastGravLensState.transitionIndex);
+    canvas.dataset.yinyangPhase = this.yinYangSeq.getPhaseLabel();
     canvas.dataset.exposure = this.renderer.toneMappingExposure.toFixed(2);
-    canvas.dataset.chromaticIntensity = (
-      this.chromaticPass.uniforms.uIntensity.value as number
-    ).toFixed(4);
+    const dynNeb = this.cosmicEnv.getDynamicNebulaDiagnostics();
+    canvas.dataset.nebulaMode = dynNeb.mode;
+    canvas.dataset.nebulaIntensity = dynNeb.intensity.toFixed(2);
+    canvas.dataset.nebulaParticles = String(dynNeb.particleCount);
+    canvas.dataset.nebulaLayers = String(dynNeb.nebulaCount);
+    canvas.dataset.pointerInfluence = dynNeb.pointerInfluence.toFixed(2);
     canvas.dataset.sagittariusEdges = String(this.figureSeq.getCompletedEdgesCount());
     canvas.dataset.texturesLoaded = `${
       this.earthSeq.getLoadedTextureCount() + this.cosmicEnv.getLoadedTextureCount()
@@ -611,7 +778,8 @@ export class CosmicEngine {
     this.lastPerfTime = now;
     const delta = clamp(rawDelta, 0.001, 0.2);
 
-    const motionScale = this.reducedMotion ? 0.25 : 1.0;
+    // Calm Cinema Mode: serene, unhurried organic animation tempo
+    const motionScale = 0.68;
     this.elapsed += delta * motionScale;
 
     if (this.hasEntered && this.isPlaying) {
@@ -629,7 +797,7 @@ export class CosmicEngine {
       this.lastChapterIndex = activeChapter.index;
       this.callbacks.onChapterTransition?.(activeChapter.index);
     }
-    const nextChapter = CHAPTERS[Math.min(activeChapter.index + 1, CHAPTERS.length - 1)];
+    const nextChapter = CHAPTERS[Math.min(activeChapter.index + 1, CHAPTERS.length - 1)]!;
     const blendToNext = smoothstep(activeChapter.end - 6, activeChapter.end, this.filmTime);
 
     _nextFogColor.set(nextChapter.fogColor);
@@ -648,7 +816,7 @@ export class CosmicEngine {
     // Update continuous camera choreography
     this.cameraDirector.update(this.camera, this.filmTime, delta, this.reducedMotion);
 
-    // Compute smooth camera velocity & apply depth-based parallax to starfields, nebulae & galaxies
+    // Compute smooth camera velocity & apply depth-based parallax
     const invDelta = 1 / Math.max(delta, 0.008);
     _instCameraVel
       .copy(this.camera.position)
@@ -673,6 +841,31 @@ export class CosmicEngine {
     _parallaxOptions.reducedMotion = this.reducedMotion;
     _parallaxOptions.silenceDamp = 1 - silenceDip * 0.85;
 
+    // Track subtle pointer glide velocity & decaying ripple pulse for procedural nebulae/particles
+    const ptrVx = clamp((_smoothedPointer.x - _prevPointerNdc.x) / Math.max(delta, 0.012), -3, 3);
+    const ptrVy = clamp((_smoothedPointer.y - _prevPointerNdc.y) / Math.max(delta, 0.012), -3, 3);
+    _prevPointerNdc.copy(_smoothedPointer);
+    const ptrVelAlpha = 1 - Math.exp(-7.5 * delta);
+    _pointerVelNdc.x = THREE.MathUtils.lerp(_pointerVelNdc.x, ptrVx, ptrVelAlpha);
+    _pointerVelNdc.y = THREE.MathUtils.lerp(_pointerVelNdc.y, ptrVy, ptrVelAlpha);
+    if (this.pointerPulseEnergy > 0.001) {
+      this.pointerPulseEnergy = Math.max(0, this.pointerPulseEnergy - delta * 0.75);
+    }
+
+    const activeNarrationLine = this.hasEntered ? getActiveNarrationLine(this.filmTime) : null;
+    const narrationReactivity = computeNarrationCosmicReactivity(
+      this.filmTime,
+      activeNarrationLine,
+    );
+    const interactiveField = computeInteractiveFieldInfluence(
+      _smoothedPointer.x,
+      _smoothedPointer.y,
+      _pointerVelNdc.x,
+      _pointerVelNdc.y,
+      this.pointerPulseEnergy,
+      this.prefersReducedMotion,
+    );
+
     // Update Guiding Star & all 7 continuous scene layers
     const guidingScale = this.computeGuidingStarState(this.filmTime);
     this.cosmicEnv.update(
@@ -683,6 +876,10 @@ export class CosmicEngine {
       _guidingTarget,
       guidingScale,
       this.camera.quaternion,
+      _smoothedPointer.x,
+      _smoothedPointer.y,
+      narrationReactivity,
+      interactiveField,
     );
     this.cosmicEnv.applyParallax(_parallaxInput, delta, _parallaxOptions);
     this.cosmicDrift.update(
@@ -697,7 +894,7 @@ export class CosmicEngine {
     this.earthSeq.update(this.filmTime, this.elapsed, delta);
     this.figureSeq.update(this.filmTime, this.elapsed);
     this.networkSeq.update(this.filmTime, this.elapsed);
-    this.equilibriumSeq.update(this.filmTime, this.elapsed);
+    this.yinYangSeq.update(this.filmTime, this.elapsed);
     this.quietSeq.update(this.filmTime, this.elapsed);
     this.revealSeq.update(this.filmTime, this.elapsed);
     this.nucleosynthesis.update(
@@ -718,7 +915,7 @@ export class CosmicEngine {
       }
     }
 
-    // Update 100k+ GPGPU ping-pong fluid simulation with cursor & live audio bass
+    // Update GPGPU ping-pong fluid simulation when supported by hardware
     const audioBass = this.callbacks.getAudioBass ? this.callbacks.getAudioBass() : 0;
     this.gpgpuFluid.update(
       this.renderer,
@@ -740,46 +937,51 @@ export class CosmicEngine {
       );
     }
 
-    // Chapter-adaptive Unreal-style Gaussian bloom & real-time dynamic HDR exposure
-    const bloomTarget = computeBloomParams(this.filmTime);
-    this.bloomPass.strength = THREE.MathUtils.damp(
-      this.bloomPass.strength,
-      bloomTarget.strength,
-      4.0,
-      delta,
-    );
-    this.bloomPass.radius = THREE.MathUtils.damp(
-      this.bloomPass.radius,
-      bloomTarget.radius,
-      4.0,
-      delta,
-    );
-    this.bloomPass.threshold = THREE.MathUtils.damp(
-      this.bloomPass.threshold,
-      bloomTarget.threshold,
-      4.0,
-      delta,
-    );
+    // Chapter-adaptive Unreal-style Gaussian bloom (when HalfFloat HDR pipeline is active)
+    if (this.bloomPass) {
+      const bloomTarget = computeBloomParams(this.filmTime);
+      this.bloomPass.strength = THREE.MathUtils.damp(
+        this.bloomPass.strength,
+        bloomTarget.strength * 0.72,
+        4.0,
+        delta,
+      );
+      this.bloomPass.radius = THREE.MathUtils.damp(
+        this.bloomPass.radius,
+        bloomTarget.radius * 0.78,
+        4.0,
+        delta,
+      );
+      this.bloomPass.threshold = THREE.MathUtils.damp(
+        this.bloomPass.threshold,
+        Math.max(0.72, bloomTarget.threshold),
+        4.0,
+        delta,
+      );
+    }
 
     const camSpeed = _smoothCameraVel.length();
-    const optics = computeCinemaOptics(this.filmTime, camSpeed, this.reducedMotion);
-    const presentation = computeCinemaPresentation(
-      this.filmTime,
-      this.cinemaMode,
-      this.reducedMotion,
-    );
+    const optics = computeCinemaOptics(this.filmTime, camSpeed, true);
+    const presentation = computeCinemaPresentation(this.filmTime, this.cinemaMode, true);
     const lutWeights = computeChapterLutWeights(this.filmTime);
     this.lastLutLabel = lutWeights.activeLabel;
-    this.lutPass.setWeights(lutWeights);
-    this.shutterBlurPass.setShutterScale(this.reducedMotion ? 0.0 : this.cinemaMode ? 0.52 : 0.36);
+    this.lutPass?.setWeights(lutWeights);
 
-    // Chapter-transition Gravitational Lens shader pass (subtle Schwarzschild light bending)
+    // Chapter-transition Gravitational Lens pass (whisper-subtle calm shimmer)
     if (this.chapterSeekWarpPulse > 0.001) {
       this.chapterSeekWarpPulse = Math.max(0, this.chapterSeekWarpPulse - delta * 0.52);
     }
     const gravLens = computeChapterTransitionLens(this.filmTime, this.chapterSeekWarpPulse);
     this.lastGravLensState = gravLens;
-    this.gravitationalLensPass.applyState(gravLens, this.elapsed);
+    this.gravitationalLensPass?.applyState(
+      {
+        ...gravLens,
+        strength: gravLens.strength * 0.14,
+        dispersion: 0,
+        ringGlint: gravLens.ringGlint * 0.25,
+      },
+      this.elapsed,
+    );
 
     this.renderer.toneMappingExposure = THREE.MathUtils.damp(
       this.renderer.toneMappingExposure,
@@ -788,85 +990,54 @@ export class CosmicEngine {
       delta,
     );
 
-    // Project gravitational lens anchor & primary anamorphic flare source into screen UV [0..1]
+    // Calm Cinema Optics: razor-sharp astrophotography (zero bokeh/focal-rack blur)
     this.camera.updateMatrixWorld();
-    const uCinema = this.cinemaPass.uniforms;
-    uCinema.uTime.value = this.elapsed;
-    uCinema.uFrameIndex.value = this.taaFrameIndex;
-    uCinema.uFocalRack.value = THREE.MathUtils.damp(
-      uCinema.uFocalRack.value as number,
-      presentation.focalRackStrength,
-      4.2,
-      delta,
-    );
-    uCinema.uLensStrength.value = THREE.MathUtils.damp(
-      uCinema.uLensStrength.value as number,
-      optics.lensStrength,
-      4.5,
-      delta,
-    );
-    uCinema.uAnamorphicIntensity.value = THREE.MathUtils.damp(
-      uCinema.uAnamorphicIntensity.value as number,
-      optics.anamorphicIntensity,
-      4.5,
-      delta,
-    );
-    uCinema.uBokehStrength.value = THREE.MathUtils.damp(
-      uCinema.uBokehStrength.value as number,
-      optics.bokehStrength,
-      4.0,
-      delta,
-    );
-    uCinema.uHalationStrength.value = THREE.MathUtils.damp(
-      uCinema.uHalationStrength.value as number,
-      optics.halationStrength,
-      4.0,
-      delta,
-    );
+    if (this.cinemaPass) {
+      const uCinema = this.cinemaPass.uniforms;
+      uCinema.uTime!.value = this.elapsed;
+      uCinema.uFrameIndex!.value = this.frameCounter;
+      uCinema.uFocalRack!.value = 0.0;
+      uCinema.uLensStrength!.value = 0.0;
+      uCinema.uAnamorphicIntensity!.value = THREE.MathUtils.damp(
+        uCinema.uAnamorphicIntensity!.value as number,
+        optics.anamorphicIntensity * 0.28,
+        4.5,
+        delta,
+      );
+      uCinema.uBokehStrength!.value = 0.0;
+      uCinema.uHalationStrength!.value = 0.02;
 
-    // Update dedicated screen-space peripheral chromatic aberration pass
-    this.chromaticPass.uniforms.uIntensity.value = THREE.MathUtils.damp(
-      this.chromaticPass.uniforms.uIntensity.value as number,
-      optics.chromaticIntensity,
-      5.0,
-      delta,
-    );
+      if (this.filmTime < 120) {
+        _projWorldPos.set(0, 0, 0);
+      } else {
+        _projWorldPos.set(0, 0, -515);
+      }
+      _projWorldPos.project(this.camera);
+      (uCinema.uLensCenter!.value as THREE.Vector2).set(
+        _projWorldPos.x * 0.5 + 0.5,
+        _projWorldPos.y * 0.5 + 0.5,
+      );
 
-    // Gravitational lensing center: Prologue Singularity (0,0,0) or Final Convergence (0,0,-515)
-    if (this.filmTime < 120) {
-      _projWorldPos.set(0, 0, 0);
-    } else {
-      _projWorldPos.set(0, 0, -515);
+      if (this.filmTime >= 52 && this.filmTime <= 106) {
+        this.earthSeq.getSunWorldPosition(_projWorldPos);
+      } else if (this.filmTime < 44) {
+        _projWorldPos.set(0, 0, 0);
+      } else {
+        _projWorldPos.copy(this.cosmicEnv.guidingStar.position);
+      }
+      _projWorldPos.project(this.camera);
+      const inFront = _projWorldPos.z < 1.0;
+      (uCinema.uFlareCenter!.value as THREE.Vector2).set(
+        inFront ? _projWorldPos.x * 0.5 + 0.5 : -2.0,
+        inFront ? _projWorldPos.y * 0.5 + 0.5 : -2.0,
+      );
     }
-    _projWorldPos.project(this.camera);
-    (uCinema.uLensCenter.value as THREE.Vector2).set(
-      _projWorldPos.x * 0.5 + 0.5,
-      _projWorldPos.y * 0.5 + 0.5,
-    );
 
-    // Anamorphic 70mm streak + lens dust / hexagonal ghost source
-    if (this.filmTime >= 52 && this.filmTime <= 106) {
-      this.earthSeq.getSunWorldPosition(_projWorldPos);
-    } else if (this.filmTime < 44) {
-      _projWorldPos.set(0, 0, 0);
-    } else {
-      _projWorldPos.copy(this.cosmicEnv.guidingStar.position);
-    }
-    _projWorldPos.project(this.camera);
-    const inFront = _projWorldPos.z < 1.0;
-    (uCinema.uFlareCenter.value as THREE.Vector2).set(
-      inFront ? _projWorldPos.x * 0.5 + 0.5 : -2.0,
-      inFront ? _projWorldPos.y * 0.5 + 0.5 : -2.0,
-    );
-
-    // Temporal Anti-Aliasing (TAA) motion-adaptive blend & Halton(2,3) sub-pixel projection jitter
-    const taaBlend = computeTaaBlendFactor(camSpeed, this.reducedMotion, this.taaNeedsReset);
-    this.lastTaaBlend = taaBlend;
-    this.taaPass.setBlendFactor(taaBlend);
+    this.frameCounter++;
 
     // Optional 24fps filmic shutter cadence pacing in Cinema Presentation mode (GPU only)
     let shouldPresent = true;
-    if (!this.isSoftwareGl && presentation.cadenceFps > 0 && !this.taaNeedsReset) {
+    if (!this.isSoftwareGl && presentation.cadenceFps > 0 && !this.needsFirstFramePresent) {
       this.cadenceAccumulator += delta;
       const frameStep = 1 / presentation.cadenceFps;
       if (this.cadenceAccumulator < frameStep) {
@@ -877,27 +1048,8 @@ export class CosmicEngine {
     }
 
     if (shouldPresent) {
-      if (this.isSoftwareGl) {
-        this.renderer.render(this.scene, this.camera);
-      } else {
-        // 1. Render lightweight half-res per-object + sky screen-space velocity buffer (unjittered)
-        this.velocityBuffer.render(this.renderer, this.scene, this.camera);
-
-        // 2. Apply Halton(2,3) sub-pixel jitter strictly around EffectComposer pass
-        const renderW = Math.max(1, this.renderer.domElement.width);
-        const renderH = Math.max(1, this.renderer.domElement.height);
-        computeTaaJitter(this.taaFrameIndex++, renderW, renderH, _taaJitter);
-
-        const origProj8 = this.camera.projectionMatrix.elements[8];
-        const origProj9 = this.camera.projectionMatrix.elements[9];
-        this.camera.projectionMatrix.elements[8] = origProj8 + _taaJitter.ndcX;
-        this.camera.projectionMatrix.elements[9] = origProj9 + _taaJitter.ndcY;
-        this.composer.render();
-        // Immediately restore unjittered projection for raycasting & optics
-        this.camera.projectionMatrix.elements[8] = origProj8;
-        this.camera.projectionMatrix.elements[9] = origProj9;
-      }
-      this.taaNeedsReset = false;
+      this.renderCurrentFrame();
+      this.needsFirstFramePresent = false;
     }
     this.syncHud(false);
 
@@ -913,10 +1065,16 @@ export class CosmicEngine {
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
 
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     window.removeEventListener('resize', this.handleResize);
     this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
+    this.renderer.domElement.removeEventListener(
+      'webglcontextrestored',
+      this.handleContextRestored,
+    );
 
     this.cosmicEnv.dispose();
     this.cosmicDrift.dispose();
@@ -924,22 +1082,18 @@ export class CosmicEngine {
     this.earthSeq.dispose();
     this.figureSeq.dispose();
     this.networkSeq.dispose();
-    this.equilibriumSeq.dispose();
+    this.yinYangSeq.dispose();
     this.quietSeq.dispose();
     this.revealSeq.dispose();
     this.nucleosynthesis.dispose();
-    this.lutPass.dispose();
-    this.chromaticPass.dispose();
-    this.cinemaPass.dispose();
-    this.lensDustTex.dispose();
-    this.gravitationalLensPass.dispose();
-    this.bloomPass.dispose();
-    this.shutterBlurPass.dispose();
-    this.taaPass.dispose();
-    this.velocityBuffer.dispose();
-    this.composer.dispose();
-    this.composerRT.dispose();
-    this.envRT.dispose();
+    this.lutPass?.dispose();
+    this.cinemaPass?.dispose();
+    this.lensDustTex?.dispose();
+    this.gravitationalLensPass?.dispose();
+    this.bloomPass?.dispose();
+    this.composer?.dispose();
+    this.composerRT?.dispose();
+    this.envRT?.dispose();
     this.renderer.dispose();
 
     if (this.renderer.domElement.parentNode === this.container) {

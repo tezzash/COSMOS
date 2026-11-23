@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { SILENCE_END, SILENCE_START, clamp, smoothstep } from '../../data/chapters';
-import { buildHyderabadHipparcosStarfield } from '../hipparcos';
-import { type ParallaxInput, type ParallaxOptions, writeParallaxOffset } from '../parallax';
+import milkyWay4k from '@/assets/textures/milky_way_4k.jpg';
+import { SILENCE_END, SILENCE_START, clamp, smoothstep } from '@/data/chapters';
+import { buildHyderabadHipparcosStarfield } from '@/engine/hipparcos';
+import { type ParallaxInput, type ParallaxOptions, writeParallaxOffset } from '@/engine/parallax';
 import {
   BIG_BANG_FRAGMENT_SHADER,
   BIG_BANG_VERTEX_SHADER,
@@ -19,7 +20,15 @@ import {
   STARFIELD_VERTEX_SHADER,
   createNebulaCloudTexture,
   createSoftGlowTexture,
-} from '../shaders';
+} from '@/engine/shaders';
+import {
+  type InteractiveFieldInfluence,
+  type NarrationCosmicReactivity,
+  computeInteractiveFieldInfluence,
+  computeNarrationCosmicReactivity,
+} from '@/engine/dynamicNebulaField';
+import { DynamicNebulaParticles } from './DynamicNebulaParticles';
+import { ProceduralGalaxySystem } from './ProceduralGalaxySystem';
 
 const _parallaxTarget = new THREE.Vector3();
 
@@ -45,15 +54,22 @@ export class CosmicEnvironment {
   public readonly guidingStar = new THREE.Group();
 
   private readonly starMaterials: THREE.ShaderMaterial[] = [];
-  private readonly starfieldLayers: Array<{ mat: THREE.ShaderMaterial; depthFactor: number }> = [];
+  private readonly starfieldLayers: Array<{
+    mat: THREE.ShaderMaterial;
+    geo: THREE.BufferGeometry;
+    fullCount: number;
+    depthFactor: number;
+  }> = [];
   private readonly hipparcosPoints: THREE.Points;
+  private readonly hipparcosGeo: THREE.BufferGeometry;
   private readonly hipparcosMat: THREE.ShaderMaterial;
   private readonly hipparcosCount: number;
   private readonly nearDebrisMat: THREE.ShaderMaterial;
   private readonly nearDebrisDepthFactor = 0.92;
   private readonly nebulaMeshes: THREE.Mesh[] = [];
   private readonly nebulaMaterials: THREE.ShaderMaterial[] = [];
-  private readonly galaxies: THREE.Points[] = [];
+  public readonly dynamicNebulae: DynamicNebulaParticles;
+  public readonly galaxySystem: ProceduralGalaxySystem;
   private readonly bigBangGroup = new THREE.Group();
   private readonly bigBangMat: THREE.ShaderMaterial;
   private readonly singularityGeodesicMat: THREE.ShaderMaterial;
@@ -73,7 +89,12 @@ export class CosmicEnvironment {
   private milkyWayLoaded = false;
   private disposed = false;
 
-  constructor(isMobile: boolean, pixelRatio: number, maxAnisotropy = 4) {
+  constructor(
+    isMobile: boolean,
+    pixelRatio: number,
+    maxAnisotropy = 4,
+    onAssetSettled?: (loaded: boolean) => void,
+  ) {
     const rand = seededRandom(20021125);
     const scaleFactor = isMobile ? 0.55 : 1.0;
 
@@ -102,24 +123,34 @@ export class CosmicEnvironment {
     this.disposables.push(skyFallbackTex, skyGeo, this.milkyWayMat);
 
     const skyLoader = new THREE.TextureLoader();
-    skyLoader.load('/textures/milky_way_4k.jpg', (tex) => {
-      if (this.disposed) {
-        tex.dispose();
-        return;
-      }
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = maxAnisotropy;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      tex.generateMipmaps = true;
-      tex.needsUpdate = true;
-      this.milkyWayMat.uniforms.uMap.value = tex;
-      this.singularityGeodesicMat.uniforms.uMilkyWayMap.value = tex;
-      this.singularityGeodesicMat.uniforms.uHasMilkyWay.value = 1.0;
-      this.milkyWayTexture = tex;
-      this.disposables.push(tex);
-      this.milkyWayLoaded = true;
-    });
+    skyLoader.load(
+      milkyWay4k,
+      (tex) => {
+        if (this.disposed) {
+          tex.dispose();
+          return;
+        }
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = maxAnisotropy;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = true;
+        tex.needsUpdate = true;
+        this.milkyWayMat.uniforms.uMap!.value = tex;
+        this.singularityGeodesicMat.uniforms.uMilkyWayMap!.value = tex;
+        this.singularityGeodesicMat.uniforms.uHasMilkyWay!.value = 1.0;
+        this.milkyWayTexture = tex;
+        this.disposables.push(tex);
+        this.milkyWayLoaded = true;
+        onAssetSettled?.(true);
+      },
+      undefined,
+      () => {
+        if (!this.disposed) {
+          onAssetSettled?.(false);
+        }
+      },
+    );
 
     // 0b. Real Astronomical Hipparcos / Gaia Star Catalog Vault (~9,000 stars on desktop,
     //     4,800 on mobile) oriented precisely to the Hyderabad sky on 25 November 2002
@@ -127,6 +158,7 @@ export class CosmicEnvironment {
     const hipData = buildHyderabadHipparcosStarfield(hipCount, 385);
     this.hipparcosCount = hipData.count;
     const hipGeo = new THREE.BufferGeometry();
+    this.hipparcosGeo = hipGeo;
     hipGeo.setAttribute('position', new THREE.BufferAttribute(hipData.positions, 3));
     hipGeo.setAttribute('aScale', new THREE.BufferAttribute(hipData.scales, 1));
     hipGeo.setAttribute('aPhase', new THREE.BufferAttribute(hipData.phases, 1));
@@ -193,9 +225,11 @@ export class CosmicEnvironment {
         phases[i] = rand();
 
         const col = palette[Math.floor(rand() * palette.length)];
-        colors[i * 3] = col.r;
-        colors[i * 3 + 1] = col.g;
-        colors[i * 3 + 2] = col.b;
+        if (col) {
+          colors[i * 3] = col.r;
+          colors[i * 3 + 1] = col.g;
+          colors[i * 3 + 2] = col.b;
+        }
       }
 
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -223,7 +257,12 @@ export class CosmicEnvironment {
       pts.frustumCulled = false;
       this.root.add(pts);
       this.starMaterials.push(mat);
-      this.starfieldLayers.push({ mat, depthFactor: layer.depthFactor });
+      this.starfieldLayers.push({
+        mat,
+        geo,
+        fullCount: layer.count,
+        depthFactor: layer.depthFactor,
+      });
       this.disposables.push(geo, mat);
     });
 
@@ -248,9 +287,11 @@ export class CosmicEnvironment {
       dScale[i] = 1.2 + Math.pow(rand(), 1.8) * 3.4;
       dPhase[i] = rand();
       const c = debrisPalette[Math.floor(rand() * debrisPalette.length)];
-      dCol[i * 3] = c.r;
-      dCol[i * 3 + 1] = c.g;
-      dCol[i * 3 + 2] = c.b;
+      if (c) {
+        dCol[i * 3] = c.r;
+        dCol[i * 3 + 1] = c.g;
+        dCol[i * 3 + 2] = c.b;
+      }
     }
     debrisGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
     debrisGeo.setAttribute('aScale', new THREE.BufferAttribute(dScale, 1));
@@ -281,7 +322,16 @@ export class CosmicEnvironment {
     this.disposables.push(debrisGeo, this.nearDebrisMat);
 
     // 2. Volumetric self-shadowed nebula clouds distributed along the journey (restrained, moody deep-space density)
-    const nebulaConfigs = [
+    const nebulaConfigs: Array<{
+      pos: [number, number, number];
+      scale: number;
+      seed: number;
+      cA: string;
+      cB: string;
+      cG: string;
+      op: number;
+      depth: number;
+    }> = [
       { pos: [-22, 10, -28], scale: 98, seed: 1.3, cA: '#0f2559', cB: '#382068', cG: '#a87d3c', op: 0.36, depth: 0.24 },
       { pos: [30, -12, -125], scale: 118, seed: 3.7, cA: '#0d2659', cB: '#2f1e5c', cG: '#ad8240', op: 0.30, depth: 0.34 },
       { pos: [-28, 14, -210], scale: 124, seed: 6.2, cA: '#101f52', cB: '#3b216b', cG: '#ad8848', op: 0.28, depth: 0.28 },
@@ -322,81 +372,16 @@ export class CosmicEnvironment {
       this.disposables.push(tex, mat);
     });
 
-    // 3. Distant spiral galaxies for genuine Interstellar-scale depth
-    const galaxySpecs = [
-      { pos: [-48, 22, -52], radius: 22, tilt: [0.68, 0.25, -0.3], arms: 3, tint: '#d8b46d', depth: 0.12 },
-      { pos: [52, -18, -195], radius: 26, tilt: [0.95, -0.4, 0.4], arms: 4, tint: '#8caeff', depth: 0.18 },
-      { pos: [-46, 26, -545], radius: 34, tilt: [0.75, 0.35, 0.2], arms: 3, tint: '#e4c27c', depth: 0.14 },
-    ];
+    // 2b. Dynamic real-time procedural FBM nebulae & curl-advected particle field
+    //     reacting to narration intensity and subtle user pointer interaction
+    this.dynamicNebulae = new DynamicNebulaParticles(isMobile, pixelRatio);
+    this.root.add(this.dynamicNebulae.root);
+    this.disposables.push(this.dynamicNebulae);
 
-    galaxySpecs.forEach((spec, idx) => {
-      const count = Math.round(950 * scaleFactor);
-      const gGeo = new THREE.BufferGeometry();
-      const posArr = new Float32Array(count * 3);
-      const scaleArr = new Float32Array(count);
-      const phaseArr = new Float32Array(count);
-      const colArr = new Float32Array(count * 3);
-
-      const coreCol = new THREE.Color('#fff2d4');
-      const armCol = new THREE.Color(spec.tint);
-      const edgeCol = new THREE.Color('#3e4c9c');
-      const tmp = new THREE.Color();
-
-      for (let i = 0; i < count; i++) {
-        const radiusRatio = Math.pow(rand(), 1.45);
-        const r = radiusRatio * spec.radius;
-        const armAngle = ((i % spec.arms) / spec.arms) * Math.PI * 2;
-        const spinAngle = r * 0.32;
-        const spread = (rand() - 0.5) * (0.45 + radiusRatio * 2.1);
-
-        posArr[i * 3] = Math.cos(armAngle + spinAngle) * r + spread;
-        posArr[i * 3 + 1] = (rand() - 0.5) * (1.8 * (1 - radiusRatio * 0.7));
-        posArr[i * 3 + 2] = Math.sin(armAngle + spinAngle) * r + spread;
-
-        scaleArr[i] = 1.3 + (1 - radiusRatio) * 2.4;
-        phaseArr[i] = rand();
-
-        if (radiusRatio < 0.28) {
-          tmp.lerpColors(coreCol, armCol, radiusRatio / 0.28);
-        } else {
-          tmp.lerpColors(armCol, edgeCol, (radiusRatio - 0.28) / 0.72);
-        }
-        colArr[i * 3] = tmp.r;
-        colArr[i * 3 + 1] = tmp.g;
-        colArr[i * 3 + 2] = tmp.b;
-      }
-
-      gGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-      gGeo.setAttribute('aScale', new THREE.BufferAttribute(scaleArr, 1));
-      gGeo.setAttribute('aPhase', new THREE.BufferAttribute(phaseArr, 1));
-      gGeo.setAttribute('aColor', new THREE.BufferAttribute(colArr, 3));
-
-      const gMat = new THREE.ShaderMaterial({
-        vertexShader: STARFIELD_VERTEX_SHADER,
-        fragmentShader: STARFIELD_FRAGMENT_SHADER,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        uniforms: {
-          uTime: { value: 0 },
-          uPixelRatio: { value: pixelRatio },
-          uOpacity: { value: 0 },
-          uBurst: { value: 0 },
-          uParallaxOffset: { value: new THREE.Vector3() },
-          uVelocityStretch: { value: 0 },
-        },
-      });
-      const galaxy = new THREE.Points(gGeo, gMat);
-      galaxy.position.set(spec.pos[0], spec.pos[1], spec.pos[2]);
-      galaxy.rotation.set(spec.tilt[0], spec.tilt[1], spec.tilt[2]);
-      galaxy.userData.spinRate = idx % 2 === 0 ? 0.045 : -0.035;
-      galaxy.userData.basePos = new THREE.Vector3(spec.pos[0], spec.pos[1], spec.pos[2]);
-      galaxy.userData.depthFactor = spec.depth;
-      this.root.add(galaxy);
-      this.galaxies.push(galaxy);
-      this.starMaterials.push(gMat);
-      this.disposables.push(gGeo, gMat);
-    });
+    // 3. Procedural Galaxy System (5 distinct cohesive corridor galaxies + interactive Hero Galaxy)
+    this.galaxySystem = new ProceduralGalaxySystem(isMobile, pixelRatio);
+    this.root.add(this.galaxySystem.root);
+    this.disposables.push(this.galaxySystem);
 
     // 4. Prologue: Gargantua-inspired Relativistic Accretion Portal + Curl-Noise Big Bang
     const bbCount = Math.round(2400 * scaleFactor);
@@ -426,9 +411,11 @@ export class CosmicEnvironment {
       bbSize[i] = 1.4 + rand() * 3.0;
 
       const c = bbColors[Math.floor(rand() * bbColors.length)];
-      bbCol[i * 3] = c.r;
-      bbCol[i * 3 + 1] = c.g;
-      bbCol[i * 3 + 2] = c.b;
+      if (c) {
+        bbCol[i * 3] = c.r;
+        bbCol[i * 3 + 1] = c.g;
+        bbCol[i * 3 + 2] = c.b;
+      }
     }
 
     bbGeo.setAttribute('position', new THREE.BufferAttribute(bbPos, 3));
@@ -557,29 +544,57 @@ export class CosmicEnvironment {
     guidingTarget: THREE.Vector3,
     guidingScale: number,
     cameraQuaternion?: THREE.Quaternion,
+    pointerX = 0,
+    pointerY = 0,
+    reactivity?: NarrationCosmicReactivity,
+    interaction?: InteractiveFieldInfluence,
   ): void {
-    const entryReveal = hasEntered ? 1 : 0.22;
+    const effReactivity = reactivity ?? computeNarrationCosmicReactivity(filmTime, null);
+    const effInteraction =
+      interaction ?? computeInteractiveFieldInfluence(pointerX, pointerY, 0, 0, 0, false);
+    const entryReveal = hasEntered ? 1 : 0.42;
 
-    const firstLight = smoothstep(1.8, 7.5, filmTime);
-    const expansion = smoothstep(9.0, 42.0, filmTime);
-    const starsWake = hasEntered ? smoothstep(7.0, 22.0, filmTime) : 0.38;
+    const firstLight = 0.36 + 0.64 * smoothstep(0.0, 6.5, filmTime);
+    const expansion = smoothstep(7.5, 42.0, filmTime);
+    const starsWake = hasEntered ? 0.52 + 0.48 * smoothstep(0.0, 14.0, filmTime) : 0.48;
 
     const silenceDip =
       smoothstep(SILENCE_START - 1.5, SILENCE_START + 0.6, filmTime) *
       (1 - smoothstep(SILENCE_END, SILENCE_END + 2.8, filmTime));
-    const cosmosVisibility = clamp((starsWake * 0.92 + 0.08 * entryReveal) * (1 - silenceDip * 0.92), 0.03, 1);
+    // Chapter IV opens in an almost completely dark universe before the Yin-Yang stars ignite
+    const ch4DarkOpening =
+      smoothstep(223.5, 226.2, filmTime) * (1 - smoothstep(235.5, 248.0, filmTime));
+    const ch4CleanStage =
+      smoothstep(224.0, 229.0, filmTime) * (1 - smoothstep(280.0, 286.0, filmTime));
+
+    const cosmosVisibility = clamp(
+      (starsWake * 0.92 + 0.08 * entryReveal) *
+        (1 - silenceDip * 0.92) *
+        (1 - ch4DarkOpening * 0.84) *
+        (1 - ch4CleanStage * 0.25),
+      0.03,
+      1,
+    );
+
+    const galaxyFocusBoost = this.galaxySystem.getHeroFocusWeight();
+    const starVisBoost = Math.max(cosmosVisibility, galaxyFocusBoost * 0.85);
 
     for (let i = 0; i < this.starMaterials.length; i++) {
       const mat = this.starMaterials[i];
-      mat.uniforms.uTime.value = elapsed;
-      mat.uniforms.uOpacity.value = cosmosVisibility;
-      mat.uniforms.uBurst.value = smoothstep(370.2, 375.5, filmTime) * 0.25;
+      if (!mat) continue;
+      if (mat.uniforms.uTime) mat.uniforms.uTime.value = elapsed;
+      if (mat.uniforms.uOpacity) mat.uniforms.uOpacity.value = starVisBoost;
+      if (mat.uniforms.uBurst) {
+        mat.uniforms.uBurst.value = smoothstep(370.2, 375.5, filmTime) * 0.25;
+      }
     }
 
-    // Restrained dark-cinema 4K Milky Way backdrop (keeps obsidian black floor; dips during silence)
-    const skyReveal = hasEntered ? smoothstep(9.0, 24.0, filmTime) : 0.22;
-    this.milkyWayMat.uniforms.uOpacity.value =
-      (this.milkyWayLoaded ? 0.42 : 0.0) * skyReveal * (1 - silenceDip * 0.94);
+    // Restrained dark-cinema 4K Milky Way backdrop (keeps obsidian black floor; dips during silence & Ch4 dark opening)
+    const skyReveal = hasEntered ? 0.42 + 0.58 * smoothstep(0.0, 18.0, filmTime) : 0.32;
+    this.milkyWayMat.uniforms.uOpacity!.value =
+      (this.milkyWayLoaded ? 0.38 : 0.0) *
+      Math.max(skyReveal * (1 - ch4DarkOpening * 0.92) * (1 - ch4CleanStage * 0.42), galaxyFocusBoost * 0.78) *
+      (1 - silenceDip * 0.94);
 
     // Update ultra-near spatial dust motes + Earth eclipse cone during Chapter I
     const earthPresence =
@@ -587,65 +602,97 @@ export class CosmicEnvironment {
     const earthQuiet =
       1 -
       smoothstep(65, 76, filmTime) * (1 - smoothstep(102, 110, filmTime)) * 0.65;
-    this.nearDebrisMat.uniforms.uTime.value = elapsed;
-    this.nearDebrisMat.uniforms.uOpacity.value =
-      (hasEntered ? 0.34 : 0.16) * cosmosVisibility * earthQuiet;
-    this.nearDebrisMat.uniforms.uEclipseActive.value = earthPresence;
+    this.nearDebrisMat.uniforms.uTime!.value = elapsed;
+    this.nearDebrisMat.uniforms.uOpacity!.value =
+      (hasEntered ? 0.28 : 0.16) *
+      cosmosVisibility *
+      earthQuiet *
+      (1 - ch4CleanStage * 0.82) *
+      (1 - galaxyFocusBoost * 0.75);
+    this.nearDebrisMat.uniforms.uEclipseActive!.value = earthPresence;
 
-    // Volumetric self-shadowed nebulae
+    // Volumetric self-shadowed nebulae (dimmed gently during Ch4 so Yin-Yang nebulae hold center stage
+    // and modulated by narration reactivity so gas clouds intensify on creation and hush on rest)
     const lightAngle = elapsed * 0.05 + filmTime * 0.01;
     const lx = Math.cos(lightAngle);
     const ly = Math.sin(lightAngle);
+    const nebulaReactScale = clamp(0.58 + effReactivity.intensity * 0.44, 0.14, 1.28);
     for (let i = 0; i < this.nebulaMaterials.length; i++) {
       const mat = this.nebulaMaterials[i];
+      if (!mat) continue;
       const baseOp = mat.userData.baseOpacity as number;
-      mat.uniforms.uOpacity.value =
-        baseOp * cosmosVisibility * smoothstep(6.0, 22.0, filmTime + (hasEntered ? 0 : 18));
-      mat.uniforms.uTime.value = elapsed;
-      (mat.uniforms.uLightDir.value as THREE.Vector2).set(lx, ly);
+      if (mat.uniforms.uOpacity) {
+        mat.uniforms.uOpacity.value =
+          baseOp *
+          nebulaReactScale *
+          cosmosVisibility *
+          (1 - ch4CleanStage * 0.78) *
+          (0.45 + 0.55 * smoothstep(0.0, 14.0, filmTime + (hasEntered ? 0 : 12)));
+      }
+      if (mat.uniforms.uTime) {
+        mat.uniforms.uTime.value = elapsed;
+      }
+      if (mat.uniforms.uLightDir) {
+        (mat.uniforms.uLightDir.value as THREE.Vector2).set(lx, ly);
+      }
     }
 
-    for (let i = 0; i < this.galaxies.length; i++) {
-      const g = this.galaxies[i];
-      g.rotation.y += delta * (g.userData.spinRate as number);
-    }
+    // Dynamic real-time procedural FBM nebulae & curl-advected particle field
+    const dynamicVis = clamp(
+      (hasEntered ? 0.52 + 0.48 * smoothstep(0.0, 10.0, filmTime) : 0.45) *
+        (1 - silenceDip * 0.94) *
+        (1 - ch4DarkOpening * 0.88) *
+        (1 - ch4CleanStage * 0.68) *
+        (1 - galaxyFocusBoost * 0.72),
+      0.02,
+      1,
+    );
+    this.dynamicNebulae.update(elapsed, delta, dynamicVis, effReactivity, effInteraction);
+
+    this.galaxySystem.update(
+      elapsed,
+      delta,
+      cosmosVisibility * (1 - ch4CleanStage * 0.92),
+      pointerX,
+      pointerY,
+    );
 
     // Update Prologue Geodesic Raymarched Singularity & Curl-Noise Big Bang
     const prologueFadeOut = 1 - smoothstep(46.0, 62.0, filmTime);
     this.bigBangGroup.visible = prologueFadeOut > 0.005 || !hasEntered;
     if (this.bigBangGroup.visible) {
       const idleBreath = !hasEntered ? 0.36 + 0.08 * Math.sin(elapsed * 0.9) : 0;
-      // Keep central sprite very subtle when geodesic black hole horizon is visible
+      // Keep central singularity visibly glowing from t=0 and swell smoothly into the Big Bang
       const diskEnvelope = hasEntered
-        ? smoothstep(2.0, 9.5, filmTime) * (1 - smoothstep(28.0, 44.0, filmTime))
-        : 0.45;
+        ? (0.42 + 0.58 * smoothstep(0.0, 7.5, filmTime)) * (1 - smoothstep(28.0, 44.0, filmTime))
+        : 0.48;
       const coreOp = hasEntered
-        ? firstLight * prologueFadeOut * (1 - expansion * 0.72) * (1 - diskEnvelope * 0.75) * 0.48
-        : idleBreath * 0.35;
+        ? firstLight * prologueFadeOut * (1 - expansion * 0.72) * (1 - diskEnvelope * 0.55) * 0.58
+        : idleBreath * 0.38;
       const coreScale = hasEntered
-        ? 0.35 + firstLight * 1.4 + Math.sin(expansion * Math.PI) * 2.1
+        ? 0.65 + firstLight * 1.45 + Math.sin(expansion * Math.PI) * 2.1
         : 1.2 + 0.14 * Math.sin(elapsed * 0.8);
 
       this.singularityCore.material.opacity = coreOp;
       this.singularityCore.scale.set(coreScale, coreScale, 1);
 
-      this.singularityHalo.material.opacity = coreOp * 0.28;
-      this.singularityHalo.scale.set(coreScale * 2.4, coreScale * 2.4, 1);
+      this.singularityHalo.material.opacity = coreOp * 0.32;
+      this.singularityHalo.scale.set(coreScale * 2.6, coreScale * 2.6, 1);
 
       this.singularitySphere.visible = diskEnvelope > 0.01;
       if (this.singularitySphere.visible) {
-        const radiusScale = hasEntered ? 0.58 + smoothstep(2.0, 18.0, filmTime) * 0.56 : 0.72;
-        this.singularityGeodesicMat.uniforms.uTime.value = elapsed;
-        this.singularityGeodesicMat.uniforms.uOpacity.value = diskEnvelope * 0.96;
-        this.singularityGeodesicMat.uniforms.uHorizonRadius.value = 1.85 * radiusScale;
-        this.singularityGeodesicMat.uniforms.uDiskOuterRadius.value = 9.8 * radiusScale;
+        const radiusScale = hasEntered ? 0.62 + smoothstep(0.0, 16.0, filmTime) * 0.52 : 0.72;
+        this.singularityGeodesicMat.uniforms.uTime!.value = elapsed;
+        this.singularityGeodesicMat.uniforms.uOpacity!.value = diskEnvelope * 0.96;
+        this.singularityGeodesicMat.uniforms.uHorizonRadius!.value = 1.85 * radiusScale;
+        this.singularityGeodesicMat.uniforms.uDiskOuterRadius!.value = 9.8 * radiusScale;
       }
 
-      this.bigBangMat.uniforms.uTime.value = elapsed;
-      this.bigBangMat.uniforms.uExpansion.value = hasEntered ? expansion : 0.14;
-      this.bigBangMat.uniforms.uOpacity.value = hasEntered
-        ? smoothstep(8.2, 13.5, filmTime) * prologueFadeOut * 0.72
-        : 0.16;
+      this.bigBangMat.uniforms.uTime!.value = elapsed;
+      this.bigBangMat.uniforms.uExpansion!.value = hasEntered ? Math.max(0.12, expansion) : 0.14;
+      this.bigBangMat.uniforms.uOpacity!.value = hasEntered
+        ? (0.28 + 0.72 * smoothstep(5.5, 12.0, filmTime)) * prologueFadeOut * 0.72
+        : 0.18;
     }
 
     // Smoothly guide the recurring anchor star across scenes (snap on large timeline seeks)
@@ -670,8 +717,12 @@ export class CosmicEnvironment {
     }
     const rayScale = s * 4.8;
     this.guidingRaysMesh.scale.set(rayScale, rayScale, 1);
-    this.guidingRaysMat.uniforms.uTime.value = elapsed;
-    this.guidingRaysMat.uniforms.uIntensity.value = starVis * (0.14 + silenceDip * 0.16);
+    if (this.guidingRaysMat.uniforms.uTime) {
+      this.guidingRaysMat.uniforms.uTime.value = elapsed;
+    }
+    if (this.guidingRaysMat.uniforms.uIntensity) {
+      this.guidingRaysMat.uniforms.uIntensity.value = starVis * (0.14 + silenceDip * 0.16);
+    }
   }
 
   /**
@@ -693,27 +744,34 @@ export class CosmicEnvironment {
     const velocityStretch = options.reducedMotion ? 0 : clamp((speed - 2.5) / 14.0, 0, 1);
 
     // 1. GPU-driven starfield layers (far 0.10 -> mid 0.28 -> near 0.56)
-    for (let i = 0; i < this.starfieldLayers.length; i++) {
-      const layer = this.starfieldLayers[i];
+    for (const layer of this.starfieldLayers) {
       writeParallaxOffset(_parallaxTarget, input, layer.depthFactor, options);
-      const current = layer.mat.uniforms.uParallaxOffset.value as THREE.Vector3;
-      current.lerp(_parallaxTarget, damp);
-      layer.mat.uniforms.uVelocityStretch.value = THREE.MathUtils.lerp(
-        layer.mat.uniforms.uVelocityStretch.value as number,
-        velocityStretch * (0.35 + layer.depthFactor),
-        damp,
-      );
+      if (layer.mat.uniforms.uParallaxOffset) {
+        const current = layer.mat.uniforms.uParallaxOffset.value as THREE.Vector3;
+        current.lerp(_parallaxTarget, damp);
+      }
+      if (layer.mat.uniforms.uVelocityStretch) {
+        layer.mat.uniforms.uVelocityStretch.value = THREE.MathUtils.lerp(
+          layer.mat.uniforms.uVelocityStretch.value as number,
+          velocityStretch * (0.35 + layer.depthFactor),
+          damp,
+        );
+      }
     }
 
     // 2. Ultra-near spatial micro-dust & bokeh debris layer (depthFactor 0.92 — fastest parallax)
     writeParallaxOffset(_parallaxTarget, input, this.nearDebrisDepthFactor, options);
-    const debrisCurrent = this.nearDebrisMat.uniforms.uParallaxOffset.value as THREE.Vector3;
-    debrisCurrent.lerp(_parallaxTarget, damp);
-    (this.nearDebrisMat.uniforms.uCameraPos.value as THREE.Vector3).set(
-      input.cameraPos.x,
-      input.cameraPos.y,
-      input.cameraPos.z,
-    );
+    if (this.nearDebrisMat.uniforms.uParallaxOffset) {
+      const debrisCurrent = this.nearDebrisMat.uniforms.uParallaxOffset.value as THREE.Vector3;
+      debrisCurrent.lerp(_parallaxTarget, damp);
+    }
+    if (this.nearDebrisMat.uniforms.uCameraPos) {
+      (this.nearDebrisMat.uniforms.uCameraPos.value as THREE.Vector3).set(
+        input.cameraPos.x,
+        input.cameraPos.y,
+        input.cameraPos.z,
+      );
+    }
 
     // Keep the 4K Milky Way sphere & Hyderabad 25 Nov 2002 Hipparcos Vault centered on the camera
     this.milkyWaySphere.position.set(
@@ -749,8 +807,7 @@ export class CosmicEnvironment {
     );
 
     // 3. Volumetric self-shadowed nebula planes shifted relative to corridor base positions
-    for (let i = 0; i < this.nebulaMeshes.length; i++) {
-      const mesh = this.nebulaMeshes[i];
+    for (const mesh of this.nebulaMeshes) {
       const basePos = mesh.userData.basePos as THREE.Vector3;
       const depth = mesh.userData.depthFactor as number;
       writeParallaxOffset(_parallaxTarget, input, depth, options);
@@ -758,24 +815,21 @@ export class CosmicEnvironment {
       mesh.position.lerp(_parallaxTarget, damp);
     }
 
-    // 4. Distant spiral galaxies shift subtly to anchor monumental background scale
-    for (let i = 0; i < this.galaxies.length; i++) {
-      const galaxy = this.galaxies[i];
-      const basePos = galaxy.userData.basePos as THREE.Vector3;
-      const depth = galaxy.userData.depthFactor as number;
-      writeParallaxOffset(_parallaxTarget, input, depth, options);
-      _parallaxTarget.add(basePos);
-      galaxy.position.lerp(_parallaxTarget, damp);
-    }
+    // 3b. Dynamic procedural FBM nebulae & particle field parallax
+    this.dynamicNebulae.applyParallax(input, damp, options);
+
+    // 4. Distant procedural galaxies shift subtly to anchor monumental background scale
+    this.galaxySystem.applyParallax(input, damp, options);
   }
 
   public getNearParallaxMagnitude(): number {
     const near = this.starfieldLayers[this.starfieldLayers.length - 1];
-    if (!near) return 0;
+    if (!near || !near.mat.uniforms.uParallaxOffset) return 0;
     return (near.mat.uniforms.uParallaxOffset.value as THREE.Vector3).length();
   }
 
   public getDebrisParallaxMagnitude(): number {
+    if (!this.nearDebrisMat.uniforms.uParallaxOffset) return 0;
     return (this.nearDebrisMat.uniforms.uParallaxOffset.value as THREE.Vector3).length();
   }
 
@@ -789,6 +843,38 @@ export class CosmicEnvironment {
 
   public getHipparcosStarCount(): number {
     return this.hipparcosCount;
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    for (let i = 0; i < this.starMaterials.length; i++) {
+      const m = this.starMaterials[i];
+      if (m?.uniforms.uPixelRatio) {
+        m.uniforms.uPixelRatio.value = pixelRatio;
+      }
+    }
+    if (this.nearDebrisMat.uniforms.uPixelRatio) {
+      this.nearDebrisMat.uniforms.uPixelRatio.value = pixelRatio;
+    }
+    if (this.bigBangMat.uniforms.uPixelRatio) {
+      this.bigBangMat.uniforms.uPixelRatio.value = pixelRatio;
+    }
+    this.dynamicNebulae.setPixelRatio(pixelRatio);
+  }
+
+  public setParticleDrawRatio(ratio: number): void {
+    const r = clamp(ratio, 0.35, 1.0);
+    this.hipparcosGeo.setDrawRange(0, Math.floor(this.hipparcosCount * r));
+    for (let i = 0; i < this.starfieldLayers.length; i++) {
+      const layer = this.starfieldLayers[i];
+      if (layer) {
+        layer.geo.setDrawRange(0, Math.floor(layer.fullCount * r));
+      }
+    }
+    this.dynamicNebulae.setParticleDrawRatio(r);
+  }
+
+  public getDynamicNebulaDiagnostics() {
+    return this.dynamicNebulae.getDiagnostics();
   }
 
   public dispose(): void {

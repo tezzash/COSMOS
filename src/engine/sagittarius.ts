@@ -145,8 +145,9 @@ export function evaluateSagittariusState(filmTime: number): SagittariusFrameStat
 
   // First anchor star (Nunki, origin of edge 0) wakes slightly before the first beam departs
   const firstWake = smoothstep(SAGITTARIUS_DRAW_START - 0.8, SAGITTARIUS_DRAW_START + 0.15, filmTime);
-  if (firstWake > 0) {
-    const originIdx = SAGITTARIUS_EDGES[0].from;
+  const firstEdge = SAGITTARIUS_EDGES[0];
+  if (firstWake > 0 && firstEdge) {
+    const originIdx = firstEdge.from;
     starLit[originIdx] = firstWake;
     const age = Math.max(0, filmTime - (SAGITTARIUS_DRAW_START - 0.5));
     starFlash[originIdx] = firstWake * Math.exp(-age * 2.8);
@@ -159,6 +160,7 @@ export function evaluateSagittariusState(filmTime: number): SagittariusFrameStat
 
   for (let i = 0; i < totalEdges; i++) {
     const edge = SAGITTARIUS_EDGES[i];
+    if (!edge) continue;
     const startT = SAGITTARIUS_DRAW_START + i * stepDuration;
     const endT = startT + stepDuration * 0.92; // brief rhythmic beat before next line launches
 
@@ -172,27 +174,31 @@ export function evaluateSagittariusState(filmTime: number): SagittariusFrameStat
     }
     if (isDrawing) {
       activeEdgeIndex = i;
-      const a = SAGITTARIUS_STARS[edge.from].pos;
-      const b = SAGITTARIUS_STARS[edge.to].pos;
-      sparkPos = [
-        a[0] + (b[0] - a[0]) * easedP,
-        a[1] + (b[1] - a[1]) * easedP,
-        a[2] + (b[2] - a[2]) * easedP,
-      ];
+      const fromStar = SAGITTARIUS_STARS[edge.from];
+      const toStar = SAGITTARIUS_STARS[edge.to];
+      if (fromStar && toStar) {
+        const a = fromStar.pos;
+        const b = toStar.pos;
+        sparkPos = [
+          a[0] + (b[0] - a[0]) * easedP,
+          a[1] + (b[1] - a[1]) * easedP,
+          a[2] + (b[2] - a[2]) * easedP,
+        ];
+      }
     }
 
     // Source star lights when beam starts
     if (rawP > 0) {
-      starLit[edge.from] = Math.max(starLit[edge.from], smoothstep(0, 0.18, rawP));
+      starLit[edge.from] = Math.max(starLit[edge.from] ?? 0, smoothstep(0, 0.18, rawP));
     }
 
     // Destination star ignites with a crisp flash as the beam arrives
     if (rawP >= 0.88) {
       const arrival = smoothstep(0.88, 1.0, rawP);
-      starLit[edge.to] = Math.max(starLit[edge.to], arrival);
+      starLit[edge.to] = Math.max(starLit[edge.to] ?? 0, arrival);
       const postArrivalAge = Math.max(0, filmTime - endT);
       const flashVal = arrival * Math.exp(-postArrivalAge * 3.1);
-      starFlash[edge.to] = Math.max(starFlash[edge.to], flashVal);
+      starFlash[edge.to] = Math.max(starFlash[edge.to] ?? 0, flashVal);
     }
 
     edges.push({
@@ -207,10 +213,12 @@ export function evaluateSagittariusState(filmTime: number): SagittariusFrameStat
   const stars: SagittariusStarState[] = [];
   let litStarCount = 0;
   for (let i = 0; i < SAGITTARIUS_STARS.length; i++) {
-    if (starLit[i] >= 0.5) litStarCount++;
+    const lit = starLit[i] ?? 0;
+    const flash = starFlash[i] ?? 0;
+    if (lit >= 0.5) litStarCount++;
     stars.push({
-      lit: starLit[i],
-      flash: starFlash[i],
+      lit,
+      flash,
     });
   }
 

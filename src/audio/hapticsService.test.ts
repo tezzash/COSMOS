@@ -1,4 +1,4 @@
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import {
   HapticsService,
@@ -17,8 +17,10 @@ test('isMobileHapticDevice enables only for touch/mobile environments with Vibra
 test('buildHapticPattern keeps every pulse light and short (8ms..36ms)', () => {
   const burst = buildHapticPattern('nucleosynthesis-burst', 1.0);
   assert.ok(Array.isArray(burst) && burst.length === 3);
-  assert.ok(burst[0] >= 8 && burst[0] <= 24);
-  assert.ok(burst[2] >= 10 && burst[2] <= 28);
+  const firstPulse = burst[0] ?? 0;
+  const thirdPulse = burst[2] ?? 0;
+  assert.ok(firstPulse >= 8 && firstPulse <= 24);
+  assert.ok(thirdPulse >= 10 && thirdPulse <= 28);
 
   const tap = buildHapticPattern('network-impulse', 1.0);
   assert.equal(typeof tap, 'number');

@@ -132,7 +132,8 @@ export const CINEMA_OPTICS_SHADER = {
       vec2 q = abs(p);
       float hex = max(q.x * 0.866025 + q.y * 0.5, q.y);
       float fill = smoothstep(radius, radius * 0.28, hex);
-      float rim = exp(-pow((hex - radius * 0.84) / max(0.004, radius * 0.16), 2.0)) * 0.65;
+      float rimDelta = (hex - radius * 0.84) / max(0.004, radius * 0.16);
+      float rim = exp(-(rimDelta * rimDelta)) * 0.65;
       return fill * 0.45 + rim;
     }
 
@@ -244,7 +245,12 @@ export const CINEMA_OPTICS_SHADER = {
       float blueNoise = interleavedGradientNoise(gl_FragCoord.xy, uFrameIndex) - 0.5;
       col += vec3(blueNoise * 0.022 * shadowGrainMask);
 
-      gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
+      col = vec3(
+        col.r >= 0.0 ? min(col.r, 64.0) : 0.0,
+        col.g >= 0.0 ? min(col.g, 64.0) : 0.0,
+        col.b >= 0.0 ? min(col.b, 64.0) : 0.0
+      );
+      gl_FragColor = vec4(col, 1.0);
     }
   `,
 };

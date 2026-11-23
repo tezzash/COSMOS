@@ -174,13 +174,15 @@ function createAmbientAtmosphereBuffer(ctx: AudioContext, durationSec = 6.0): Au
 
     // Equal-power crossfade across the loop seam so repetition is completely imperceptible
     for (let i = 0; i < length; i++) {
+      const sample = raw[i] ?? 0;
       if (i < fadeSamples) {
         const alpha = i / fadeSamples;
         const fadeIn = Math.sin(alpha * Math.PI * 0.5);
         const fadeOut = Math.cos(alpha * Math.PI * 0.5);
-        out[i] = raw[i] * fadeIn + raw[length + i] * fadeOut;
+        const tail = raw[length + i] ?? 0;
+        out[i] = sample * fadeIn + tail * fadeOut;
       } else {
-        out[i] = raw[i];
+        out[i] = sample;
       }
     }
   }
@@ -386,7 +388,7 @@ export class AudioController {
       for (let i = 0; i < 4; i++) {
         const osc = ctx.createOscillator();
         osc.type = 'sine'; // Pure sine: warm, silky, never harsh or buzzing
-        const freq = baseNotes[i % baseNotes.length];
+        const freq = baseNotes[i % baseNotes.length] ?? 220;
         osc.frequency.setValueAtTime(freq, ctx.currentTime);
         osc.detune.setValueAtTime((i - 1.5) * 2.4, ctx.currentTime);
         const voiceGain = ctx.createGain();
@@ -412,7 +414,7 @@ export class AudioController {
       for (let i = 0; i < 4; i++) {
         const sOsc = ctx.createOscillator();
         sOsc.type = 'sine';
-        sOsc.frequency.setValueAtTime(shimmerChord[i], ctx.currentTime);
+        sOsc.frequency.setValueAtTime(shimmerChord[i] ?? 261.63, ctx.currentTime);
         const sGain = ctx.createGain();
         sGain.gain.setValueAtTime(0.0001, ctx.currentTime);
         sOsc.connect(sGain);
@@ -599,7 +601,7 @@ export class AudioController {
     const startBin = 1;
     const endBin = 11; // Warm harmonic midrange (~150Hz..1.8kHz)
     for (let i = startBin; i < endBin; i++) {
-      sum += this.energyBins[i];
+      sum += this.energyBins[i] ?? 0;
     }
     const raw = sum / ((endBin - startBin) * 255);
     this.smoothedEnergy = this.smoothedEnergy * 0.8 + raw * 0.2;
@@ -792,7 +794,7 @@ export class AudioController {
 
     this.padOscs.forEach((osc, i) => {
       osc.frequency.setTargetAtTime(
-        h.padNotes[i % h.padNotes.length],
+        h.padNotes[i % h.padNotes.length] ?? 220,
         now,
         rampSeconds * 0.5,
       );
@@ -908,9 +910,13 @@ export class AudioController {
       const lift = smoothstep(336.0, 364.0, filmTime);
       const chordBase = [261.63, 392.0, 493.88, 659.25];
       for (let i = 0; i < this.shimmerOscs.length; i++) {
-        const freq = chordBase[i] * (1 + lift * 0.25);
-        this.shimmerOscs[i].frequency.setTargetAtTime(freq, now, 0.15);
-        this.shimmerGains[i].gain.setTargetAtTime(0.24 * (1 - i * 0.12), now, 0.15);
+        const osc = this.shimmerOscs[i];
+        const gain = this.shimmerGains[i];
+        const baseFreq = chordBase[i];
+        if (!osc || !gain || baseFreq === undefined) continue;
+        const freq = baseFreq * (1 + lift * 0.25);
+        osc.frequency.setTargetAtTime(freq, now, 0.15);
+        gain.gain.setTargetAtTime(0.24 * (1 - i * 0.12), now, 0.15);
       }
     }
   }
@@ -1016,18 +1022,22 @@ export class AudioController {
         -5.5,
       ];
 
-      this.playFeltPianoNote(freq, harmony.melodyVolume, dur, spatialPos, false);
+      if (freq !== undefined) {
+        this.playFeltPianoNote(freq, harmony.melodyVolume, dur, spatialPos, false);
+      }
 
       // Every 3rd beat, add a delicate high celestial harp shimmer echo
       if (step % 3 === 1 && chapter.id !== 'chapter-5') {
         const shimFreq = harmony.shimmerNotes[step % harmony.shimmerNotes.length];
-        window.setTimeout(() => {
-          this.playFeltPianoNote(shimFreq, harmony.melodyVolume * 0.42, 2.8, [
-            -spatialPos[0] * 0.8,
-            spatialPos[1] + 0.8,
-            -5.0,
-          ], true);
-        }, 360);
+        if (shimFreq !== undefined) {
+          window.setTimeout(() => {
+            this.playFeltPianoNote(shimFreq, harmony.melodyVolume * 0.42, 2.8, [
+              -spatialPos[0] * 0.8,
+              spatialPos[1] + 0.8,
+              -5.0,
+            ], true);
+          }, 360);
+        }
       }
     }
   }

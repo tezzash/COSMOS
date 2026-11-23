@@ -1,4 +1,4 @@
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import {
   SCHEDULED_STAR_BIRTHS,
@@ -38,11 +38,13 @@ test('findTriggeredStarBirths detects both continuous playback crossings and dir
   // Continuous playback crossing Hyderabad birth star (82.0s)
   const continuous = findTriggeredStarBirths(81.8, 82.2);
   assert.equal(continuous.length, 1);
-  assert.equal(continuous[0].event.id, 'hyderabad-birth-star');
+  assert.equal(continuous[0]?.event.id, 'hyderabad-birth-star');
 
   // Direct seek right after birth star ignition still spawns burst with elapsed initialAge
   const seekHit = findTriggeredStarBirths(10.0, 83.2);
   assert.equal(seekHit.length, 1);
-  assert.equal(seekHit[0].event.id, 'hyderabad-birth-star');
-  assert.ok(Math.abs(seekHit[0].initialAge - 1.2) < 0.01);
+  const firstHit = seekHit[0];
+  assert.ok(firstHit);
+  assert.equal(firstHit.event.id, 'hyderabad-birth-star');
+  assert.ok(Math.abs(firstHit.initialAge - 1.2) < 0.01);
 });

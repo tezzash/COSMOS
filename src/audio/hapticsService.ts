@@ -140,7 +140,7 @@ export class HapticsService {
   }
 
   public cancel(): void {
-    if (typeof this.env.vibrate === 'function') {
+    if (this.pulseCount > 0 && typeof this.env.vibrate === 'function') {
       try {
         this.env.vibrate(0);
       } catch {

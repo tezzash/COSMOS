@@ -366,25 +366,29 @@ export class CelestialEquilibrium {
     this.curlBuffer.update(elapsed, starFocusRadius * 1.66, converge, dissolve);
     this.curlPosAttr.needsUpdate = true;
     this.curlColAttr.needsUpdate = true;
-    this.curlPointsMat.uniforms.uTime.value = elapsed;
-    this.curlPointsMat.uniforms.uOpacity.value = activeOp * (0.45 + 0.55 * converge);
+    if (this.curlPointsMat.uniforms.uTime) this.curlPointsMat.uniforms.uTime.value = elapsed;
+    if (this.curlPointsMat.uniforms.uOpacity) {
+      this.curlPointsMat.uniforms.uOpacity.value = activeOp * (0.45 + 0.55 * converge);
+    }
 
     // Precision gyroscope astrolabe rings spin smoothly around Star I
     for (let i = 0; i < this.goldGyroRings.length; i++) {
-      this.goldGyroRings[i].rotation.z = elapsed * (0.24 + i * 0.11) * (i % 2 === 0 ? 1 : -1);
+      const ring = this.goldGyroRings[i];
+      if (ring) {
+        ring.rotation.z = elapsed * (0.24 + i * 0.11) * (i % 2 === 0 ? 1 : -1);
+      }
     }
 
     // Playful eccentric moons dance around Star II
-    for (let i = 0; i < this.violetMoons.length; i++) {
-      const m = this.violetMoons[i];
+    for (const m of this.violetMoons) {
       m.pivot.rotation.y = elapsed * m.speed + m.phase;
     }
 
     // Update procedural binary star photospheres & coronas
-    this.goldStarMat.uniforms.uTime.value = elapsed;
-    this.goldStarMat.uniforms.uOpacity.value = activeOp;
-    this.violetStarMat.uniforms.uTime.value = elapsed;
-    this.violetStarMat.uniforms.uOpacity.value = activeOp;
+    if (this.goldStarMat.uniforms.uTime) this.goldStarMat.uniforms.uTime.value = elapsed;
+    if (this.goldStarMat.uniforms.uOpacity) this.goldStarMat.uniforms.uOpacity.value = activeOp;
+    if (this.violetStarMat.uniforms.uTime) this.violetStarMat.uniforms.uTime.value = elapsed;
+    if (this.violetStarMat.uniforms.uOpacity) this.violetStarMat.uniforms.uOpacity.value = activeOp;
 
     const coronaPulse = 0.92 + 0.08 * Math.sin(elapsed * 1.6);
     this.goldCoronaMat.opacity = activeOp * 0.44 * coronaPulse;
@@ -393,8 +397,10 @@ export class CelestialEquilibrium {
     // Volumetric figure-eight lemniscate ribbons ignite warmly as the stars lock into orbit
     const ribbonIntensity = smoothstep(0.22, 0.95, converge) * activeOp;
     for (let i = 0; i < this.lemniscateRibbonMats.length; i++) {
-      this.lemniscateRibbonMats[i].uniforms.uTime.value = elapsed + i * 0.9;
-      this.lemniscateRibbonMats[i].uniforms.uOpacity.value = ribbonIntensity * (0.56 - i * 0.1);
+      const mat = this.lemniscateRibbonMats[i];
+      if (!mat) continue;
+      if (mat.uniforms.uTime) mat.uniforms.uTime.value = elapsed + i * 0.9;
+      if (mat.uniforms.uOpacity) mat.uniforms.uOpacity.value = ribbonIntensity * (0.56 - i * 0.1);
     }
 
     // Lagrange L1 central crossover spark pulses softly at the exact center of balance
@@ -403,9 +409,9 @@ export class CelestialEquilibrium {
     this.l1SparkMat.opacity = ribbonIntensity * 0.85;
 
     // Gravitational-wave spacetime spiral disk radiates subtly beneath the binary pair
-    this.gravWaveMat.uniforms.uTime.value = elapsed;
-    this.gravWaveMat.uniforms.uOpacity.value = activeOp * 0.68;
-    this.gravWaveMat.uniforms.uConverge.value = converge;
+    if (this.gravWaveMat.uniforms.uTime) this.gravWaveMat.uniforms.uTime.value = elapsed;
+    if (this.gravWaveMat.uniforms.uOpacity) this.gravWaveMat.uniforms.uOpacity.value = activeOp * 0.68;
+    if (this.gravWaveMat.uniforms.uConverge) this.gravWaveMat.uniforms.uConverge.value = converge;
   }
 
   public dispose(): void {

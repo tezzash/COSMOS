@@ -134,9 +134,11 @@ export class TitleReveal {
       bSize[i] = 1.6 + rand() * 3.1;
 
       const c = goldPalette[Math.floor(rand() * goldPalette.length)];
-      bCol[i * 3] = c.r;
-      bCol[i * 3 + 1] = c.g;
-      bCol[i * 3 + 2] = c.b;
+      if (c) {
+        bCol[i * 3] = c.r;
+        bCol[i * 3 + 1] = c.g;
+        bCol[i * 3 + 2] = c.b;
+      }
     }
 
     bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3));
@@ -234,23 +236,36 @@ export class TitleReveal {
       this.convergenceGroup.rotation.y = elapsed * 0.25;
       for (let i = 0; i < this.convergenceRings.length; i++) {
         const ring = this.convergenceRings[i];
+        if (!ring) continue;
         ring.rotation.x += 0.004 * (i + 1);
         ring.rotation.z -= 0.003 * (i + 1);
         const mat = ring.material as THREE.MeshStandardMaterial;
         mat.opacity = (ring.userData.baseOp as number) * weight * preSilence;
       }
-      this.convergenceGeodesicMat.uniforms.uTime.value = elapsed * 1.25;
-      this.convergenceGeodesicMat.uniforms.uOpacity.value = weight * preSilence * 0.94;
-      this.convergenceGeodesicMat.uniforms.uHorizonRadius.value = 2.35 * ringScale;
-      this.convergenceGeodesicMat.uniforms.uDiskOuterRadius.value = 12.6 * ringScale;
+      if (this.convergenceGeodesicMat.uniforms.uTime) {
+        this.convergenceGeodesicMat.uniforms.uTime.value = elapsed * 1.25;
+      }
+      if (this.convergenceGeodesicMat.uniforms.uOpacity) {
+        this.convergenceGeodesicMat.uniforms.uOpacity.value = weight * preSilence * 0.94;
+      }
+      if (this.convergenceGeodesicMat.uniforms.uHorizonRadius) {
+        this.convergenceGeodesicMat.uniforms.uHorizonRadius.value = 2.35 * ringScale;
+      }
+      if (this.convergenceGeodesicMat.uniforms.uDiskOuterRadius) {
+        this.convergenceGeodesicMat.uniforms.uDiskOuterRadius.value = 12.6 * ringScale;
+      }
     }
 
     // Phase 2: Golden supernova particle burst right after hard silence (370.5 -> 382)
     const burstProgress = smoothstep(SILENCE_END, SILENCE_END + 10.5, filmTime);
     const burstOp = smoothstep(SILENCE_END - 0.1, SILENCE_END + 0.8, filmTime);
-    this.burstMat.uniforms.uTime.value = elapsed;
-    this.burstMat.uniforms.uExpansion.value = burstProgress * 0.82;
-    this.burstMat.uniforms.uOpacity.value = burstOp * 0.68 * weight;
+    if (this.burstMat.uniforms.uTime) this.burstMat.uniforms.uTime.value = elapsed;
+    if (this.burstMat.uniforms.uExpansion) {
+      this.burstMat.uniforms.uExpansion.value = burstProgress * 0.82;
+    }
+    if (this.burstMat.uniforms.uOpacity) {
+      this.burstMat.uniforms.uOpacity.value = burstOp * 0.68 * weight;
+    }
 
     // Gentle orbital framing dust behind the ISHA title
     const crownVis = smoothstep(TITLE_REVEAL_TIME, TITLE_REVEAL_TIME + 4.0, filmTime);
@@ -282,14 +297,20 @@ export class TitleReveal {
           THREE.MathUtils.lerp(startY, endY, tp) - Math.sin(tp * Math.PI) * 1.4;
         this.shootingTailPositions[i * 3 + 2] = z;
       }
-      this.shootingTail.geometry.attributes.position.needsUpdate = true;
+      if (this.shootingTail.geometry.attributes.position) {
+        this.shootingTail.geometry.attributes.position.needsUpdate = true;
+      }
     }
   }
 
   public setMilkyWayTexture(tex: THREE.Texture | null): void {
     if (!tex) return;
-    this.convergenceGeodesicMat.uniforms.uMilkyWayMap.value = tex;
-    this.convergenceGeodesicMat.uniforms.uHasMilkyWay.value = 1.0;
+    if (this.convergenceGeodesicMat.uniforms.uMilkyWayMap) {
+      this.convergenceGeodesicMat.uniforms.uMilkyWayMap.value = tex;
+    }
+    if (this.convergenceGeodesicMat.uniforms.uHasMilkyWay) {
+      this.convergenceGeodesicMat.uniforms.uHasMilkyWay.value = 1.0;
+    }
   }
 
   public dispose(): void {

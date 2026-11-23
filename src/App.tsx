@@ -1,3 +1,4 @@
+import { AnimatePresence, MotionConfig } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AudioController } from './audio/AudioController';
 import { computeAmbientAtmosphereState } from './audio/ambientAtmosphere';
@@ -9,7 +10,6 @@ import { NarrationOverlay } from './components/NarrationOverlay';
 import { WebGLFallback } from './components/WebGLFallback';
 import {
   FILM_DURATION,
-  TITLE_REVEAL_TIME,
   clamp,
   getChapterAtTime,
   isTitleRevealed,
@@ -36,10 +36,28 @@ export default function App() {
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<CosmicEngine | null>(null);
   const audioRef = useRef<AudioController | null>(null);
-  const hapticsRef = useRef<HapticsService | null>(null);
-  if (!hapticsRef.current) {
-    hapticsRef.current = new HapticsService();
-  }
+  const [haptics] = useState<HapticsService>(() => new HapticsService());
+  const [hapticsStats, setHapticsStats] = useState<{
+    supported: boolean;
+    pulses: number;
+    last: HapticEventType | null;
+  }>(() => ({
+    supported: haptics.isSupported(),
+    pulses: 0,
+    last: null,
+  }));
+
+  const triggerHaptic = useCallback(
+    (event: HapticEventType, intensity?: number, bypassCooldown?: boolean) => {
+      haptics.trigger(event, intensity, bypassCooldown);
+      setHapticsStats({
+        supported: haptics.isSupported(),
+        pulses: haptics.getPulseCount(),
+        last: haptics.getLastEvent(),
+      });
+    },
+    [haptics],
+  );
 
   const [webglSupported, setWebglSupported] = useState<boolean>(() => isWebGLAvailable());
   const [hasEntered, setHasEntered] = useState<boolean>(initialQuery.autostart);
@@ -58,18 +76,18 @@ export default function App() {
   const captionUnsubRef = useRef<(() => void) | null>(null);
 
   // Refs for stable WebGL callback access without tearing down the canvas
-  const audioControllerInit = () => {
+  const audioControllerInit = useCallback(() => {
     if (!audioRef.current) {
       audioRef.current = new AudioController();
       audioRef.current.setHighImpactAudioListener((eventType, intensity) => {
-        hapticsRef.current?.trigger(eventType, intensity, eventType === 'reveal-supernova');
+        triggerHaptic(eventType, intensity, eventType === 'reveal-supernova');
       });
       captionUnsubRef.current = audioRef.current.subscribeCaptionSync((snap) => {
         setCaptionSync(snap);
       });
     }
     return audioRef.current;
-  };
+  }, [triggerHaptic]);
 
   const handleEngineTimeUpdate = useCallback(
     (t: number, connections: number, starLaunched: boolean) => {
@@ -91,18 +109,18 @@ export default function App() {
     onBirthStarTriggered: () => {
       setBirthStarLaunched(true);
       audioRef.current?.playInteractionChime(1.12, [1.5, 1.0, -4.0]);
-      hapticsRef.current?.trigger('birth-star-ignition', 1.05, true);
+      triggerHaptic('birth-star-ignition', 1.05, true);
     },
     onNetworkImpulse: (count: number, spatialPos?: readonly [number, number, number]) => {
       setNetworkConnections(count);
       audioRef.current?.playInteractionChime(0.95 + (count % 5) * 0.08, spatialPos);
-      hapticsRef.current?.trigger('network-impulse', 0.9);
+      triggerHaptic('network-impulse', 0.9);
     },
     onNucleosynthesisBurst: (intensity: number) => {
-      hapticsRef.current?.trigger('nucleosynthesis-burst', intensity);
+      triggerHaptic('nucleosynthesis-burst', intensity);
     },
     onChapterTransition: () => {
-      hapticsRef.current?.trigger('chapter-transition', 0.9);
+      triggerHaptic('chapter-transition', 0.9);
     },
     onSpatialAnchor: (rx: number, ry: number, rz: number) => {
       audioRef.current?.setSpatialAnchor(rx, ry, rz);
@@ -112,34 +130,43 @@ export default function App() {
       setWebglSupported(false);
     },
   });
-  callbacksRef.current.onTimeUpdate = handleEngineTimeUpdate;
 
-  // Mount Three.js WebGL engine ONCE in isolated ref container
+  useEffect(() => {
+    callbacksRef.current.onTimeUpdate = handleEngineTimeUpdate;
+  }, [handleEngineTimeUpdate]);
+
+  // Mount Three.js WebGL engine ONCE in isolated ref container with safe fallback on init errors
   useEffect(() => {
     if (!webglSupported || !canvasContainerRef.current) return;
 
-    const engine = new CosmicEngine(
-      canvasContainerRef.current,
-      {
-        onTimeUpdate: (t, c, b) => callbacksRef.current.onTimeUpdate(t, c, b),
-        onFilmComplete: () => callbacksRef.current.onFilmComplete(),
-        onBirthStarTriggered: () => callbacksRef.current.onBirthStarTriggered(),
-        onNetworkImpulse: (c, sp) => callbacksRef.current.onNetworkImpulse(c, sp),
-        onNucleosynthesisBurst: (intensity) => callbacksRef.current.onNucleosynthesisBurst(intensity),
-        onChapterTransition: () => callbacksRef.current.onChapterTransition(),
-        onSpatialAnchor: (x, y, z) => callbacksRef.current.onSpatialAnchor(x, y, z),
-        getAudioBass: () => callbacksRef.current.getAudioBass(),
-        onContextLost: () => callbacksRef.current.onContextLost(),
-      },
-      {
-        entered: initialQuery.autostart,
-        timeSec: initialQuery.startTime,
-      },
-    );
-    engineRef.current = engine;
+    let engine: CosmicEngine | null = null;
+    try {
+      engine = new CosmicEngine(
+        canvasContainerRef.current,
+        {
+          onTimeUpdate: (t, c, b) => callbacksRef.current.onTimeUpdate(t, c, b),
+          onFilmComplete: () => callbacksRef.current.onFilmComplete(),
+          onBirthStarTriggered: () => callbacksRef.current.onBirthStarTriggered(),
+          onNetworkImpulse: (c, sp) => callbacksRef.current.onNetworkImpulse(c, sp),
+          onNucleosynthesisBurst: (intensity) => callbacksRef.current.onNucleosynthesisBurst(intensity),
+          onChapterTransition: () => callbacksRef.current.onChapterTransition(),
+          onSpatialAnchor: (x, y, z) => callbacksRef.current.onSpatialAnchor(x, y, z),
+          getAudioBass: () => callbacksRef.current.getAudioBass(),
+          onContextLost: () => callbacksRef.current.onContextLost(),
+        },
+        {
+          entered: initialQuery.autostart,
+          timeSec: initialQuery.startTime,
+        },
+      );
+      engineRef.current = engine;
+    } catch {
+      queueMicrotask(() => setWebglSupported(false));
+      return;
+    }
 
     return () => {
-      engine.dispose();
+      engine?.dispose();
       engineRef.current = null;
     };
   }, [webglSupported, initialQuery.autostart, initialQuery.startTime]);
@@ -172,25 +199,22 @@ export default function App() {
       captionUnsubRef.current = null;
       audioRef.current?.dispose();
       audioRef.current = null;
-      hapticsRef.current?.cancel();
+      haptics.cancel();
     };
-  }, []);
+  }, [haptics]);
 
   // Keep mobile haptics synced to mute & playback state
   useEffect(() => {
-    hapticsRef.current?.setMuted(isMuted);
-    hapticsRef.current?.setEnabled(hasEntered && isPlaying);
-  }, [hasEntered, isMuted, isPlaying]);
+    haptics.setMuted(isMuted);
+    haptics.setEnabled(hasEntered && isPlaying);
+  }, [haptics, hasEntered, isMuted, isPlaying]);
 
   const activeChapter = useMemo(() => getChapterAtTime(filmTime), [filmTime]);
   const activeLine = useMemo(() => getActiveNarrationLine(filmTime), [filmTime]);
   const activeFacts = useMemo(() => getActiveFacts(filmTime), [filmTime]);
   const activeTrait = useMemo(() => getActiveTrait(filmTime), [filmTime]);
   const atmosphereState = useMemo(
-    () =>
-      audioRef.current
-        ? audioRef.current.getAmbientAtmosphereState()
-        : computeAmbientAtmosphereState(filmTime, hasEntered && isPlaying, isMuted),
+    () => computeAmbientAtmosphereState(filmTime, hasEntered && isPlaying, isMuted),
     [filmTime, hasEntered, isPlaying, isMuted],
   );
 
@@ -214,7 +238,7 @@ export default function App() {
     audio.initAndStart();
     audio.syncClock(initialQuery.startTime, true);
     engineRef.current?.enterUniverse(initialQuery.startTime);
-  }, [initialQuery.startTime, isMuted, volume]);
+  }, [audioControllerInit, initialQuery.startTime, isMuted, volume]);
 
   const handleTogglePlay = useCallback(() => {
     setIsPlaying((prev) => {
@@ -252,7 +276,7 @@ export default function App() {
     audio.initAndStart();
     audio.syncClock(0, true);
     audio.setPlaying(true);
-  }, []);
+  }, [audioControllerInit]);
 
   const handleToggleMute = useCallback(() => {
     setIsMuted((prev) => {
@@ -338,6 +362,7 @@ export default function App() {
   ]);
 
   return (
+    <MotionConfig reducedMotion="user">
     <main
       className="relative w-screen h-screen overflow-hidden bg-[#020308]"
       data-state={hasEntered ? (isPlaying ? 'playing' : 'paused') : 'entry'}
@@ -346,9 +371,9 @@ export default function App() {
       data-atmosphere-cutoff={String(atmosphereState.lowpassHz)}
       data-atmosphere-swell={atmosphereState.swellIntensity.toFixed(2)}
       data-atmosphere-moment={atmosphereState.activeMoment}
-      data-haptics-supported={hapticsRef.current?.isSupported() ? 'true' : 'false'}
-      data-haptics-pulses={String(hapticsRef.current?.getPulseCount() ?? 0)}
-      data-haptics-last={(hapticsRef.current?.getLastEvent() as HapticEventType | null) ?? 'none'}
+      data-haptics-supported={hapticsStats.supported ? 'true' : 'false'}
+      data-haptics-pulses={String(hapticsStats.pulses)}
+      data-haptics-last={hapticsStats.last ?? 'none'}
     >
       {/* Isolated full-bleed WebGL canvas mount (never re-rendered by React HUD updates) */}
       {webglSupported ? (
@@ -368,10 +393,11 @@ export default function App() {
       {/* Spoiler-free opening entry screen */}
       {!hasEntered && <EntryOverlay onEnter={handleEnter} />}
 
-      {/* Active cinematic film overlays & collapsible controls */}
-      {hasEntered && (
-        <>
+      {/* Global Framer Motion entry/exit fade for active cinematic narration overlay */}
+      <AnimatePresence mode="wait">
+        {hasEntered && (
           <NarrationOverlay
+            key="narration-overlay"
             filmTime={filmTime}
             chapter={activeChapter}
             activeLine={activeLine}
@@ -387,25 +413,29 @@ export default function App() {
             onTriggerNetworkPulse={handleTriggerNetworkPulse}
             onReplay={handleReplay}
           />
+        )}
+      </AnimatePresence>
 
-          <CinemaControls
-            filmTime={filmTime}
-            chapter={activeChapter}
-            isPlaying={isPlaying}
-            isMuted={isMuted}
-            volume={volume}
-            captionsEnabled={captionsEnabled}
-            controlsCollapsed={controlsCollapsed}
-            onTogglePlay={handleTogglePlay}
-            onSeek={handleSeek}
-            onReplay={handleReplay}
-            onToggleMute={handleToggleMute}
-            onVolumeChange={handleVolumeChange}
-            onToggleCaptions={() => setCaptionsEnabled((v) => !v)}
-            onToggleCollapsed={() => setControlsCollapsed((v) => !v)}
-          />
-        </>
+      {/* Active collapsible cinema controls */}
+      {hasEntered && (
+        <CinemaControls
+          filmTime={filmTime}
+          chapter={activeChapter}
+          isPlaying={isPlaying}
+          isMuted={isMuted}
+          volume={volume}
+          captionsEnabled={captionsEnabled}
+          controlsCollapsed={controlsCollapsed}
+          onTogglePlay={handleTogglePlay}
+          onSeek={handleSeek}
+          onReplay={handleReplay}
+          onToggleMute={handleToggleMute}
+          onVolumeChange={handleVolumeChange}
+          onToggleCaptions={() => setCaptionsEnabled((v) => !v)}
+          onToggleCollapsed={() => setControlsCollapsed((v) => !v)}
+        />
       )}
     </main>
+    </MotionConfig>
   );
 }

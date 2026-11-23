@@ -62,6 +62,7 @@ export class ConstellationFigure {
 
     for (let e = 0; e < totalEdges; e++) {
       const edge = SAGITTARIUS_EDGES[e];
+      if (!edge) continue;
       const phase = ((e * 37) % 100) / 100;
 
       // Palette per Sagittarius asterism group (bow/arrow warm gold, bowstring pale sapphire-violet)
@@ -357,12 +358,14 @@ export class ConstellationFigure {
 
     // 1. Update progressive star-by-star constellation lines
     let activeVerts = 0;
-    for (let e = 0; e < state.edges.length; e++) {
-      const edgeState = state.edges[e];
+    for (const edgeState of state.edges) {
       if (edgeState.progress <= 0.0005) continue;
 
-      const a = SAGITTARIUS_STARS[edgeState.from].pos;
-      const b = SAGITTARIUS_STARS[edgeState.to].pos;
+      const fromStar = SAGITTARIUS_STARS[edgeState.from];
+      const toStar = SAGITTARIUS_STARS[edgeState.to];
+      if (!fromStar || !toStar) continue;
+      const a = fromStar.pos;
+      const b = toStar.pos;
       const p = edgeState.progress;
 
       const edgeVertStart = activeVerts;
@@ -385,9 +388,15 @@ export class ConstellationFigure {
     }
 
     this.lineGeometry.setDrawRange(0, activeVerts);
-    this.lineGeometry.attributes.position.needsUpdate = true;
-    this.lineMaterial.uniforms.uTime.value = elapsed;
-    this.lineMaterial.uniforms.uOpacity.value = 0.96 * weight;
+    if (this.lineGeometry.attributes.position) {
+      this.lineGeometry.attributes.position.needsUpdate = true;
+    }
+    if (this.lineMaterial.uniforms.uTime) {
+      this.lineMaterial.uniforms.uTime.value = elapsed;
+    }
+    if (this.lineMaterial.uniforms.uOpacity) {
+      this.lineMaterial.uniforms.uOpacity.value = 0.96 * weight;
+    }
 
     // 2. Update leading star-spark traveling along the active connecting beam
     if (state.sparkPos) {
@@ -405,6 +414,7 @@ export class ConstellationFigure {
       const sprite = this.starSprites[i];
       const halo = this.starHaloSprites[i];
       const starState = state.stars[i];
+      if (!sprite || !halo || !starState) continue;
       const mag = sprite.userData.magnitude as number;
       const phase = sprite.userData.phase as number;
 
@@ -444,15 +454,14 @@ export class ConstellationFigure {
     ];
 
     this.artifacts.forEach((art, idx) => {
-      const localScale = (0.32 + 0.68 * reveals[idx]) * weight;
+      const localScale = (0.32 + 0.68 * (reveals[idx] ?? 0)) * weight;
       art.scale.setScalar(Math.max(0.001, localScale));
       art.rotation.y = elapsed * (0.22 + idx * 0.045);
       art.position.y += Math.sin(elapsed * 0.85 + idx * 1.7) * 0.0025;
     });
 
     // Live harmonic sound-wave bar animation
-    for (let i = 0; i < this.soundBars.length; i++) {
-      const bar = this.soundBars[i];
+    for (const bar of this.soundBars) {
       const idx = bar.userData.barIndex as number;
       const h = 0.35 + 0.95 * Math.abs(Math.sin(elapsed * 2.4 + idx * 0.62));
       bar.scale.y = h;

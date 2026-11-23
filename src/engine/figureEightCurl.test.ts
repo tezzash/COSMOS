@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import {
   FigureEightCurlBuffer,
   evaluateLemniscate3D,
@@ -27,7 +27,7 @@ test('evaluateLemniscate3D forms a symmetric figure-eight wrapping both binary l
 
 test('sampleDivergenceFreeCurl3D has zero numeric divergence across 3D space', () => {
   const eps = 1e-4;
-  const pts = [
+  const pts: ReadonlyArray<readonly [number, number, number]> = [
     [1.2, -2.5, 0.8],
     [-4.1, 3.3, -1.7],
     [0.0, 0.5, 2.2],
@@ -52,18 +52,18 @@ test('FigureEightCurlBuffer evolves finite particles across both golden and viol
   let goldCount = 0;
   let violetCount = 0;
   for (let i = 0; i < buf.count; i++) {
-    const x = buf.positions[i * 3];
-    const y = buf.positions[i * 3 + 1];
-    const z = buf.positions[i * 3 + 2];
+    const x = buf.positions[i * 3] ?? NaN;
+    const y = buf.positions[i * 3 + 1] ?? NaN;
+    const z = buf.positions[i * 3 + 2] ?? NaN;
     assert.ok(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z));
     if (x > 2.5) {
       goldCount++;
       // Golden lobe particles should be warm (R > B)
-      assert.ok(buf.colors[i * 3] > buf.colors[i * 3 + 2]);
+      assert.ok((buf.colors[i * 3] ?? 0) > (buf.colors[i * 3 + 2] ?? 0));
     } else if (x < -2.5) {
       violetCount++;
       // Violet lobe particles should be cool sapphire-violet (B > R)
-      assert.ok(buf.colors[i * 3 + 2] > buf.colors[i * 3]);
+      assert.ok((buf.colors[i * 3 + 2] ?? 0) > (buf.colors[i * 3] ?? 0));
     }
   }
   assert.ok(goldCount > 40 && violetCount > 40);

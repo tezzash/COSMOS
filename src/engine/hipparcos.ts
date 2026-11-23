@@ -120,9 +120,9 @@ export function equatorialToHyderabadCartesian(
  */
 export function bvToRgb(bvInput: number): [number, number, number] {
   const bv = Math.max(-0.4, Math.min(2.0, bvInput));
-  let r = 0;
-  let g = 0;
-  let b = 0;
+  let r: number;
+  let g: number;
+  let b: number;
 
   if (bv < 0.0) {
     const t = (bv + 0.4) / 0.4;
@@ -318,6 +318,7 @@ export function buildHyderabadHipparcosStarfield(
   // 1. Place all exact Hipparcos primary anchor stars first
   for (let i = 0; i < HIPPARCOS_ANCHOR_STARS.length; i++) {
     const s = HIPPARCOS_ANCHOR_STARS[i];
+    if (!s) continue;
     writeStar(i, s.raHours, s.decDeg, s.mag, s.bv);
   }
 

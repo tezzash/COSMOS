@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import {
   LUT_SIZE,
   bakeFilmPrintLutData,
@@ -38,6 +38,6 @@ test('bakeFilmPrintLutData generates valid 32x32x32 LUTs that preserve pure obsi
 
   // Mid-gray (16,16,16): Kodak 2383 warm must have higher R than B; cool must have higher B than R
   const midOff = ((16 * LUT_SIZE + 16) * LUT_SIZE + 16) * 4;
-  assert.ok(warm[midOff] > warm[midOff + 2]);
-  assert.ok(cool[midOff + 2] > cool[midOff]);
+  assert.ok((warm[midOff] ?? 0) > (warm[midOff + 2] ?? 0));
+  assert.ok((cool[midOff + 2] ?? 0) > (cool[midOff] ?? 0));
 });

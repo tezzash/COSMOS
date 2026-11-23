@@ -147,7 +147,7 @@ export class FigureEightCurlBuffer {
     const zWave = 1.65 + dissolve * 2.2;
 
     for (let i = 0; i < n; i++) {
-      const theta = this.baseAngles[i] + elapsed * this.speeds[i];
+      const theta = (this.baseAngles[i] ?? 0) + elapsed * (this.speeds[i] ?? 0);
       const base = evaluateLemniscate3D(theta, halfSpan, loopHeightRatio, zWave, this.tempPos);
 
       // Pinch cross-section gracefully as plasma funnels through Lagrange L1 (x ≈ 0)
@@ -155,11 +155,11 @@ export class FigureEightCurlBuffer {
       const waist = 0.32 + 0.68 * xNorm;
 
       const bx = base.x;
-      const by = base.y + this.tubeOffsetsY[i] * waist;
-      const bz = base.z + this.tubeOffsetsZ[i] * waist;
+      const by = base.y + (this.tubeOffsetsY[i] ?? 0) * waist;
+      const bz = base.z + (this.tubeOffsetsZ[i] ?? 0) * waist;
 
       const curl = sampleDivergenceFreeCurl3D(bx, by, bz, elapsed * 0.55, 0.23, this.tempCurl);
-      const amp = this.curlAmps[i] * curlScale * (0.45 + 0.55 * xNorm);
+      const amp = (this.curlAmps[i] ?? 0) * curlScale * (0.45 + 0.55 * xNorm);
 
       const px = bx + curl.x * amp;
       const py = by + curl.y * amp;

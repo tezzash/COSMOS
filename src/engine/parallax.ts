@@ -89,15 +89,19 @@ function interpolateStops(
   t: number,
   stops: ReadonlyArray<readonly [number, number]>,
 ): number {
-  let idx = 0;
+  const first = stops[0];
+  if (!first) return 0;
+  let a = first;
+  let b = stops[stops.length - 1] ?? first;
   for (let i = 0; i < stops.length - 1; i++) {
-    if (t >= stops[i][0] && t <= stops[i + 1][0]) {
-      idx = i;
+    const cur = stops[i];
+    const next = stops[i + 1];
+    if (cur && next && t >= cur[0] && t <= next[0]) {
+      a = cur;
+      b = next;
       break;
     }
   }
-  const a = stops[idx];
-  const b = stops[Math.min(idx + 1, stops.length - 1)];
   const span = Math.max(0.001, b[0] - a[0]);
   const w = smoothstep(0, 1, (t - a[0]) / span);
   return a[1] + (b[1] - a[1]) * w;
@@ -131,16 +135,18 @@ export function computeBloomParams(filmTime: number): BloomParams {
     [405, 0.32, 0.62, 0.68], // Closing hold
   ];
 
-  let idx = 0;
+  let a = stops[0]!;
+  let b = stops[stops.length - 1] ?? a;
   for (let i = 0; i < stops.length - 1; i++) {
-    if (t >= stops[i][0] && t <= stops[i + 1][0]) {
-      idx = i;
+    const cur = stops[i];
+    const next = stops[i + 1];
+    if (cur && next && t >= cur[0] && t <= next[0]) {
+      a = cur;
+      b = next;
       break;
     }
   }
 
-  const a = stops[idx];
-  const b = stops[Math.min(idx + 1, stops.length - 1)];
   const span = Math.max(0.001, b[0] - a[0]);
   const w = smoothstep(0, 1, (t - a[0]) / span);
 

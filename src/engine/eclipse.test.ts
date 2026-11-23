@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { computePlanetaryEclipse } from './eclipse.ts';
 
 test('sunward points receive full sunlight and zero eclipse shadow', () => {

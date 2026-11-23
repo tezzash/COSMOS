@@ -39,8 +39,8 @@ const NUCLEOSYNTHESIS_BURST_FRAGMENT_SHADER = /* glsl */ `
     if (r > 1.0) discard;
 
     float angle = atan(p.y, p.x);
-    float expansion = 1.0 - pow(1.0 - uAgeNorm, 2.7);
-    float flashEnv = smoothstep(0.0, 0.06, uAgeNorm) * pow(max(0.0, 1.0 - uAgeNorm), 2.15);
+    float expansion = 1.0 - pow(max(0.0001, 1.0 - uAgeNorm), 2.7);
+    float flashEnv = smoothstep(0.0, 0.06, uAgeNorm) * pow(max(0.0001, 1.0 - uAgeNorm), 2.15);
 
     // Crisp incandescent fusion core flash (tight pinpoint core, never a flat blown-out blob)
     float coreFlash = exp(-r * r * mix(46.0, 18.0, expansion)) * (0.72 - uAgeNorm * 0.45);
@@ -48,21 +48,23 @@ const NUCLEOSYNTHESIS_BURST_FRAGMENT_SHADER = /* glsl */ `
     // Expanding nucleosynthesis shockwave ring
     float ringRadius = 0.08 + expansion * 0.78;
     float ringWidth = mix(20.0, 8.5, expansion);
-    float shockRing = exp(-pow((r - ringRadius) * ringWidth, 2.0)) * (1.0 - uAgeNorm * 0.65) * 0.42;
+    float shockDelta = (r - ringRadius) * ringWidth;
+    float shockRing = exp(-(shockDelta * shockDelta)) * (1.0 - uAgeNorm * 0.65) * 0.42;
 
     // Secondary inner plasma echo ring
-    float innerRing = exp(-pow((r - ringRadius * 0.62) * 16.0, 2.0)) * (1.0 - uAgeNorm) * 0.24;
+    float innerDelta = (r - ringRadius * 0.62) * 16.0;
+    float innerRing = exp(-(innerDelta * innerDelta)) * (1.0 - uAgeNorm) * 0.24;
 
     // Procedural coronal light-burst rays rotating organically around the newly born star
     float rot = uTime * 0.22 + uSeed * 1.7;
-    float raysA = pow(max(0.0, cos(angle * 4.0 + rot)), 6.0);
-    float raysB = pow(max(0.0, cos(angle * 7.0 - rot * 1.3 + uSeed)), 10.0) * 0.75;
+    float raysA = pow(max(0.0001, cos(angle * 4.0 + rot)), 6.0);
+    float raysB = pow(max(0.0001, cos(angle * 7.0 - rot * 1.3 + uSeed)), 10.0) * 0.75;
     float rayMask = (raysA + raysB) * exp(-r * 3.8) * smoothstep(0.0, 0.12, r) * (1.0 - uAgeNorm * 0.72);
 
     // Subtle anamorphic diffraction cross right at peak ignition
     float crossX = exp(-abs(p.y) * 34.0) * exp(-abs(p.x) * 3.8);
     float crossY = exp(-abs(p.x) * 40.0) * exp(-abs(p.y) * 5.2);
-    float anamorphic = (crossX * 0.34 + crossY * 0.14) * pow(max(0.0, 1.0 - uAgeNorm), 2.5);
+    float anamorphic = (crossX * 0.34 + crossY * 0.14) * pow(max(0.0001, 1.0 - uAgeNorm), 2.5);
 
     float rawLight = (coreFlash + shockRing + innerRing + rayMask * 0.46 + anamorphic) * flashEnv * uIntensity;
     if (rawLight < 0.002) discard;
@@ -117,7 +119,7 @@ const NUCLEOSYNTHESIS_PARTICLE_VERTEX_SHADER = /* glsl */ `
 
     // Staggered per-particle launch & explosive deceleration into swirling nebular ejecta
     float localAge = clamp((uAgeNorm - aPhase * 0.14) / 0.86, 0.0, 1.0);
-    float expansion = 1.0 - pow(1.0 - localAge, 2.8);
+    float expansion = 1.0 - pow(max(0.0001, 1.0 - localAge), 2.8);
 
     // Outward radial blast + gentle magnetic dipole spiral curl
     float swirlAngle = localAge * (1.2 + aElementBand * 1.4) * (aPhase > 0.5 ? 1.0 : -1.0);
@@ -142,7 +144,7 @@ const NUCLEOSYNTHESIS_PARTICLE_VERTEX_SHADER = /* glsl */ `
     vColor = fusionSpectralColor(colorTime, aElementBand);
 
     float rise = smoothstep(0.0, 0.05, localAge);
-    float fade = pow(max(0.0, 1.0 - localAge), 1.38);
+    float fade = pow(max(0.0001, 1.0 - localAge), 1.38);
     float twinkle = 0.72 + 0.28 * sin(uTime * 4.5 + aPhase * 6.28318);
     vAlpha = rise * fade * twinkle * uIntensity;
     vSpark = smoothstep(2.1, 3.6, aScale) * (1.0 - localAge * 0.5);
@@ -168,7 +170,7 @@ const NUCLEOSYNTHESIS_PARTICLE_FRAGMENT_SHADER = /* glsl */ `
 
     // Hot additive core + luminous soft plasma halo + delicate 4-point fusion glint
     float core = exp(-d * d * 72.0);
-    float halo = pow(max(0.0, 1.0 - d * 2.0), 3.2) * 0.34;
+    float halo = pow(max(0.0001, 1.0 - d * 2.0), 3.2) * 0.34;
     float spikeX = exp(-abs(uv.y) * 54.0) * exp(-abs(uv.x) * 6.5);
     float spikeY = exp(-abs(uv.x) * 54.0) * exp(-abs(uv.y) * 6.5);
     float spikes = (spikeX + spikeY) * vSpark * 0.38;
@@ -344,8 +346,7 @@ export class StellarNucleosynthesis {
   ): void {
     // Reuse an existing young burst at the same location instead of double-stacking white flashes
     let slot: BurstSlotResources | null = null;
-    for (let i = 0; i < this.slots.length; i++) {
-      const candidate = this.slots[i];
+    for (const candidate of this.slots) {
       if (candidate.state.active && candidate.state.age < 2.2) {
         const dx = candidate.state.originX - origin[0];
         const dy = candidate.state.originY - origin[1];
@@ -357,9 +358,10 @@ export class StellarNucleosynthesis {
       }
     }
     if (!slot) {
-      slot = this.slots[this.nextSlotIdx];
+      slot = this.slots[this.nextSlotIdx] ?? null;
       this.nextSlotIdx = (this.nextSlotIdx + 1) % this.slots.length;
     }
+    if (!slot) return;
 
     slot.state.active = true;
     slot.state.age = Math.max(0, initialAge);
@@ -392,8 +394,7 @@ export class StellarNucleosynthesis {
       if (this.prevFilmTime < 0) {
         // First frame (e.g. ?autostart=1&t=82.5): check seek lookback so star birth bursts appear immediately
         const initialHits = findTriggeredStarBirths(-10, filmTime, 4.2);
-        for (let i = 0; i < initialHits.length; i++) {
-          const { event, initialAge } = initialHits[i];
+        for (const { event, initialAge } of initialHits) {
           this.spawnBurst(event.origin, event.intensity, event.radius, 5.4, initialAge, event.seed);
           if (initialAge < 0.8) {
             onBurstSpawned?.(event.intensity);
@@ -401,8 +402,7 @@ export class StellarNucleosynthesis {
         }
       } else {
         const hits = findTriggeredStarBirths(this.prevFilmTime, filmTime, 4.2);
-        for (let i = 0; i < hits.length; i++) {
-          const { event, initialAge } = hits[i];
+        for (const { event, initialAge } of hits) {
           this.spawnBurst(event.origin, event.intensity, event.radius, 5.4, initialAge, event.seed);
           onBurstSpawned?.(event.intensity);
         }
@@ -410,8 +410,7 @@ export class StellarNucleosynthesis {
       this.prevFilmTime = filmTime;
     }
 
-    for (let i = 0; i < this.slots.length; i++) {
-      const slot = this.slots[i];
+    for (const slot of this.slots) {
       if (!slot.state.active) continue;
 
       slot.state.age += delta;
@@ -427,22 +426,24 @@ export class StellarNucleosynthesis {
       const billboardScale = slot.state.radius * (0.48 + ageNorm * 0.72);
       slot.burstBillboard.scale.set(billboardScale, billboardScale, 1);
 
-      slot.burstMat.uniforms.uAgeNorm.value = ageNorm;
-      slot.burstMat.uniforms.uIntensity.value = slot.state.intensity;
-      slot.burstMat.uniforms.uSeed.value = slot.state.seed;
-      slot.burstMat.uniforms.uTime.value = elapsed;
+      const bUniforms = slot.burstMat.uniforms;
+      if (bUniforms.uAgeNorm) bUniforms.uAgeNorm.value = ageNorm;
+      if (bUniforms.uIntensity) bUniforms.uIntensity.value = slot.state.intensity;
+      if (bUniforms.uSeed) bUniforms.uSeed.value = slot.state.seed;
+      if (bUniforms.uTime) bUniforms.uTime.value = elapsed;
 
-      slot.particlesMat.uniforms.uAgeNorm.value = ageNorm;
-      slot.particlesMat.uniforms.uRadius.value = slot.state.radius;
-      slot.particlesMat.uniforms.uIntensity.value = slot.state.intensity;
-      slot.particlesMat.uniforms.uTime.value = elapsed;
+      const pUniforms = slot.particlesMat.uniforms;
+      if (pUniforms.uAgeNorm) pUniforms.uAgeNorm.value = ageNorm;
+      if (pUniforms.uRadius) pUniforms.uRadius.value = slot.state.radius;
+      if (pUniforms.uIntensity) pUniforms.uIntensity.value = slot.state.intensity;
+      if (pUniforms.uTime) pUniforms.uTime.value = elapsed;
     }
   }
 
   public getActiveBurstCount(): number {
     let active = 0;
-    for (let i = 0; i < this.slots.length; i++) {
-      if (this.slots[i].state.active) active++;
+    for (const slot of this.slots) {
+      if (slot.state.active) active++;
     }
     return active;
   }

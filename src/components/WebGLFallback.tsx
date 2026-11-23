@@ -15,7 +15,9 @@ interface WebGLFallbackProps {
 export function WebGLFallback({ filmTime, chapter, reducedMotion }: WebGLFallbackProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const timeRef = useRef(filmTime);
-  timeRef.current = filmTime;
+  useEffect(() => {
+    timeRef.current = filmTime;
+  }, [filmTime]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

@@ -48,10 +48,14 @@ const KEYFRAMES: CameraKeyframe[] = [
   { t: 282, pos: [0, 3.0, -366], look: [0, -1.0, -425], fov: 46 },
 
   // CHAPTER V (285..335): Quiet hours — slow descent to peaceful planet & softly lit window
-  { t: 295, pos: [3.2, 2.2, -396], look: [0, -1.2, -425], fov: 43 },
-  { t: 312, pos: [1.4, 0.8, -407.5], look: [0, -1.4, -425], fov: 40 },
-  { t: 326, pos: [-0.8, 0.6, -408.2], look: [0, -1.2, -425], fov: 41 },
-  { t: 334, pos: [0, 2.4, -448], look: [0, 0, -515], fov: 48 },
+  { t: 292, pos: [3.0, 2.4, -394], look: [0, -1.6, -425], fov: 43 },
+  { t: 299.5, pos: [1.4, 0.6, -406], look: [-1.6, -4.4, -425.5], fov: 38 },
+  { t: 303, pos: [0.4, -1.0, -411], look: [-1.4, -1.6, -427], fov: 34 },
+  { t: 308, pos: [1.6, -1.05, -412.5], look: [-0.6, -1.0, -427], fov: 36 },
+  { t: 318, pos: [0.6, -1.15, -414.5], look: [-1.0, -0.95, -427], fov: 33 },
+  { t: 326, pos: [-0.2, -1.1, -416.5], look: [-0.8, -0.9, -427], fov: 31 },
+  { t: 331, pos: [0.4, 1.4, -418], look: [0.4, 0.4, -440], fov: 40 },
+  { t: 336, pos: [0, 3.2, -448], look: [0, 0, -515], fov: 48 },
 
   // FINAL CHAPTER (335..405): Convergence vortex -> pullback -> silence -> solitary star -> ISHA constellation
   { t: 348, pos: [9.5, 5.5, -476], look: [0, 0, -515], fov: 50 },

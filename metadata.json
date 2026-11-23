@@ -1,0 +1,8 @@
+{
+  "name": "A Story Told by the Universe",
+  "description": "An interactive cinematic cosmic film narrated by the Universe — travelling from the birth of space and time to one extraordinary existence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

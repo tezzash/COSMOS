@@ -21,12 +21,8 @@ const _colEnd = new THREE.Color();
  * Chapter II: An Unusual Form of Existence (centered at 0, 4, -175).
  * Sequential star-by-star Sagittarius constellation (Archer's drawn bow, skyward arrow,
  * Teapot asterism core, and celestial crown/stance) connecting one star after another
- * with progressive luminous starlight beams and traveling leading sparks, framed by
- * 4 composite procedural 3D symbolic artifacts:
- * 1. Illuminated Open Tome (intelligence & relentless growth)
- * 2. Obsidian Summit Peak & Golden Beacon (ambition & doing extraordinary things)
- * 3. Cinema Aperture & Harmonic Sound Bars (movies & music)
- * 4. Strategic Polyhedral Game Constellation (games, wit & playful spirit)
+ * with progressive luminous starlight beams and traveling leading sparks. The figure
+ * itself carries the portrait: each trait is written in light by the narration overlay.
  */
 export class ConstellationFigure {
   public readonly root = new THREE.Group();
@@ -38,8 +34,6 @@ export class ConstellationFigure {
   private readonly starSprites: THREE.Sprite[] = [];
   private readonly starHaloSprites: THREE.Sprite[] = [];
   private readonly leadingSpark: THREE.Sprite;
-  private readonly artifacts: THREE.Group[] = [];
-  private readonly soundBars: THREE.Mesh[] = [];
   private readonly auraRing: THREE.Mesh;
   private readonly disposables: Array<{ dispose: () => void }> = [];
 
@@ -188,159 +182,6 @@ export class ConstellationFigure {
     this.figureGroup.add(this.auraRing);
     this.root.add(this.figureGroup);
     this.disposables.push(haloGeo, haloMat);
-
-    // Shared PBR materials for the 4 composite 3D symbolic artifacts
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xe6c175,
-      metalness: 0.92,
-      roughness: 0.2,
-    });
-    const obsidianMat = new THREE.MeshStandardMaterial({
-      color: 0x14192e,
-      metalness: 0.28,
-      roughness: 0.72,
-    });
-    const parchmentMat = new THREE.MeshStandardMaterial({
-      color: 0xd8ccb5,
-      metalness: 0.05,
-      roughness: 0.85,
-    });
-    const violetCrystalMat = new THREE.MeshStandardMaterial({
-      color: 0x6f59b8,
-      metalness: 0.65,
-      roughness: 0.28,
-      emissive: 0x24164f,
-      emissiveIntensity: 0.42,
-    });
-    this.disposables.push(goldMat, obsidianMat, parchmentMat, violetCrystalMat);
-
-    // Artifact 1: Illuminated Open Book (6 distinct parts)
-    const bookGroup = new THREE.Group();
-    const coverGeo = new THREE.BoxGeometry(1.5, 0.08, 2.0);
-    const spineGeo = new THREE.CylinderGeometry(0.12, 0.12, 2.02, 12);
-    const pageGeo = new THREE.BoxGeometry(1.36, 0.14, 1.84);
-    const ribbonGeo = new THREE.BoxGeometry(0.08, 0.02, 2.25);
-
-    const leftCover = new THREE.Mesh(coverGeo, obsidianMat);
-    leftCover.position.set(-0.76, -0.05, 0);
-    leftCover.rotation.z = 0.22;
-    const rightCover = new THREE.Mesh(coverGeo, obsidianMat);
-    rightCover.position.set(0.76, -0.05, 0);
-    rightCover.rotation.z = -0.22;
-    const spine = new THREE.Mesh(spineGeo, goldMat);
-    spine.rotation.x = Math.PI / 2;
-    spine.position.set(0, -0.18, 0);
-    const leftPage = new THREE.Mesh(pageGeo, parchmentMat);
-    leftPage.position.set(-0.72, 0.07, 0);
-    leftPage.rotation.z = 0.26;
-    const rightPage = new THREE.Mesh(pageGeo, parchmentMat);
-    rightPage.position.set(0.72, 0.07, 0);
-    rightPage.rotation.z = -0.26;
-    const ribbon = new THREE.Mesh(ribbonGeo, goldMat);
-    ribbon.position.set(0.14, 0.16, 0.15);
-    ribbon.rotation.z = -0.22;
-
-    bookGroup.add(leftCover, rightCover, spine, leftPage, rightPage, ribbon);
-    bookGroup.position.set(-12.6, 3.6, -4.4);
-    this.root.add(bookGroup);
-    this.artifacts.push(bookGroup);
-    this.disposables.push(coverGeo, spineGeo, pageGeo, ribbonGeo);
-
-    // Artifact 2: Obsidian Mountain Peak + Winding Golden Trail + Tiny Summit Beacon (6 parts)
-    const mountainGroup = new THREE.Group();
-    const baseGeo = new THREE.CylinderGeometry(1.85, 2.2, 0.24, 7);
-    const mainPeakGeo = new THREE.ConeGeometry(1.65, 2.8, 6);
-    const sidePeakGeo = new THREE.ConeGeometry(1.05, 1.85, 5);
-    const capGeo = new THREE.ConeGeometry(0.45, 0.72, 6);
-    const ringTrackGeo = new THREE.TorusGeometry(1.05, 0.04, 8, 48);
-
-    const mBase = new THREE.Mesh(baseGeo, obsidianMat);
-    const mainPeak = new THREE.Mesh(mainPeakGeo, obsidianMat);
-    mainPeak.position.set(0, 1.48, 0);
-    const sidePeak = new THREE.Mesh(sidePeakGeo, violetCrystalMat);
-    sidePeak.position.set(-0.95, 0.96, 0.35);
-    const snowCap = new THREE.Mesh(capGeo, goldMat);
-    snowCap.position.set(0, 2.54, 0);
-    const track = new THREE.Mesh(ringTrackGeo, goldMat);
-    track.position.set(0, 0.85, 0);
-    track.rotation.set(Math.PI * 0.44, 0.22, 0.15);
-
-    const beaconSprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: starTex,
-        color: 0xfff5d6,
-        transparent: true,
-        opacity: 0.85,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      }),
-    );
-    beaconSprite.position.set(0, 3.15, 0);
-    beaconSprite.scale.set(0.85, 0.85, 1);
-
-    mountainGroup.add(mBase, mainPeak, sidePeak, snowCap, track, beaconSprite);
-    mountainGroup.position.set(12.8, -2.0, -4.6);
-    this.root.add(mountainGroup);
-    this.artifacts.push(mountainGroup);
-    this.disposables.push(
-      baseGeo,
-      mainPeakGeo,
-      sidePeakGeo,
-      capGeo,
-      ringTrackGeo,
-      beaconSprite.material,
-    );
-
-    // Artifact 3: Cinema Aperture Ring + Harmonic Musical Waveform Bars (11 parts)
-    const musicFilmGroup = new THREE.Group();
-    const outerReelGeo = new THREE.TorusGeometry(1.65, 0.09, 12, 48);
-    const innerReelGeo = new THREE.TorusGeometry(1.25, 0.035, 10, 48);
-    const outerReel = new THREE.Mesh(outerReelGeo, goldMat);
-    const innerReel = new THREE.Mesh(innerReelGeo, violetCrystalMat);
-    musicFilmGroup.add(outerReel, innerReel);
-
-    const barGeo = new THREE.BoxGeometry(0.11, 1.0, 0.11);
-    for (let i = 0; i < 9; i++) {
-      const bar = new THREE.Mesh(barGeo, i % 2 === 0 ? goldMat : parchmentMat);
-      bar.position.set((i - 4) * 0.22, 0, 0.12);
-      bar.userData.barIndex = i;
-      musicFilmGroup.add(bar);
-      this.soundBars.push(bar);
-    }
-    musicFilmGroup.position.set(12.2, 4.5, -5.6);
-    this.root.add(musicFilmGroup);
-    this.artifacts.push(musicFilmGroup);
-    this.disposables.push(outerReelGeo, innerReelGeo, barGeo);
-
-    // Artifact 4: Strategic Game Polyhedron & Orbital Gimbal (6 parts)
-    const gameGroup = new THREE.Group();
-    const coreGeo = new THREE.IcosahedronGeometry(0.95, 0);
-    const wireGeo = new THREE.IcosahedronGeometry(1.18, 0);
-    const gimbalGeo = new THREE.TorusGeometry(1.55, 0.045, 10, 56);
-    const nodeGeo = new THREE.OctahedronGeometry(0.18, 0);
-
-    const core = new THREE.Mesh(coreGeo, violetCrystalMat);
-    const wireMat = new THREE.MeshBasicMaterial({
-      color: 0xe6c175,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.52,
-    });
-    const wire = new THREE.Mesh(wireGeo, wireMat);
-    const gimbal1 = new THREE.Mesh(gimbalGeo, goldMat);
-    gimbal1.rotation.x = Math.PI * 0.35;
-    const gimbal2 = new THREE.Mesh(gimbalGeo, obsidianMat);
-    gimbal2.rotation.y = Math.PI * 0.45;
-    const nodeA = new THREE.Mesh(nodeGeo, goldMat);
-    nodeA.position.set(1.55, 0, 0);
-    const nodeB = new THREE.Mesh(nodeGeo, goldMat);
-    nodeB.position.set(-1.55, 0, 0);
-
-    gameGroup.add(core, wire, gimbal1, gimbal2, nodeA, nodeB);
-    gameGroup.position.set(-12.4, -2.6, -5.4);
-    this.root.add(gameGroup);
-    this.artifacts.push(gameGroup);
-    this.disposables.push(coreGeo, wireGeo, wireMat, gimbalGeo, nodeGeo);
   }
 
   public getCompletedEdgesCount(): number {
@@ -434,29 +275,6 @@ export class ConstellationFigure {
     // Gentle orbital breathing of the Sagittarius constellation lifted cleanly above subtitles
     this.figureGroup.rotation.y = Math.sin(elapsed * 0.2) * 0.12;
     this.figureGroup.position.y = 0.75 + Math.sin(elapsed * 0.55) * 0.18;
-
-    // 4. Orbit & animate the 4 symbolic artifacts as the narrator describes each facet
-    const reveals = [
-      smoothstep(124, 132, filmTime), // Book (mind & improvement)
-      smoothstep(115, 123, filmTime), // Mountain (ambition)
-      smoothstep(150, 157, filmTime), // Movies & music
-      smoothstep(148, 155, filmTime), // Games & playful wit
-    ];
-
-    this.artifacts.forEach((art, idx) => {
-      const localScale = (0.32 + 0.68 * reveals[idx]) * weight;
-      art.scale.setScalar(Math.max(0.001, localScale));
-      art.rotation.y = elapsed * (0.22 + idx * 0.045);
-      art.position.y += Math.sin(elapsed * 0.85 + idx * 1.7) * 0.0025;
-    });
-
-    // Live harmonic sound-wave bar animation
-    for (let i = 0; i < this.soundBars.length; i++) {
-      const bar = this.soundBars[i];
-      const idx = bar.userData.barIndex as number;
-      const h = 0.35 + 0.95 * Math.abs(Math.sin(elapsed * 2.4 + idx * 0.62));
-      bar.scale.y = h;
-    }
   }
 
   public dispose(): void {

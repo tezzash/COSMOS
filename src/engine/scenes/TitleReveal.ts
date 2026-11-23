@@ -18,7 +18,7 @@ import {
 
 /**
  * Final Chapter: The Revelation (centered at 0, 0, -515).
- * 1. Converging celestial crown uniting golden network rings + Yin-Yang twin bands (335..364.5)
+ * 1. Convergence vortex: gold, violet and Earth-blue particle arms spiral into one point (335..364.5)
  * 2. Hard cosmic silence (365..370.5) — only one solitary golden star remains
  * 3. Radiant 3D golden particle burst expanding gracefully at 370.5..376
  * 4. Luminous 3D constellation lattice behind the monumental title reveal
@@ -28,7 +28,8 @@ export class TitleReveal {
   public readonly root = new THREE.Group();
 
   private readonly convergenceGroup = new THREE.Group();
-  private readonly convergenceRings: THREE.Mesh[] = [];
+  private readonly vortex: THREE.Points;
+  private readonly vortexMat: THREE.ShaderMaterial;
   private readonly convergenceGeodesicMat: THREE.ShaderMaterial;
   private readonly convergenceGeodesicMesh: THREE.Mesh;
   private readonly burstMat: THREE.ShaderMaterial;
@@ -50,31 +51,77 @@ export class TitleReveal {
       return s / 4294967296;
     };
 
-    // 1. Converging celestial rings (echoing Earth astrolabe + Yin-Yang gold & violet)
-    const ringSpecs = [
-      { r: 10.5, tube: 0.055, col: 0xf1ce82, op: 0.72 },
-      { r: 13.8, tube: 0.045, col: 0x8e72d8, op: 0.58 },
-      { r: 17.2, tube: 0.04, col: 0xffe9b5, op: 0.62 },
-      { r: 21.0, tube: 0.032, col: 0x5c80d4, op: 0.45 },
-    ];
-    ringSpecs.forEach((spec, idx) => {
-      const geo = new THREE.TorusGeometry(spec.r, spec.tube, 12, 128);
-      const mat = new THREE.MeshStandardMaterial({
-        color: spec.col,
-        emissive: spec.col,
-        emissiveIntensity: 0.45,
-        metalness: 0.9,
-        roughness: 0.2,
-        transparent: true,
-        opacity: spec.op,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.set(idx * 0.45, idx * 0.65, idx * 0.25);
-      mesh.userData.baseOp = spec.op;
-      this.convergenceGroup.add(mesh);
-      this.convergenceRings.push(mesh);
-      this.disposables.push(geo, mat);
+    // 1. Convergence vortex: every thread of the film (gold, violet, Earth-blue) spirals into one point
+    const vortexCount = Math.round(9000 * scaleFactor);
+    const vPos = new Float32Array(vortexCount * 3);
+    const vSeed = new Float32Array(vortexCount * 4);
+    const vCol = new Float32Array(vortexCount * 3);
+    const palette = [new THREE.Color('#ffd98a'), new THREE.Color('#fff4dc'), new THREE.Color('#9a7ae6'), new THREE.Color('#6f9ae8')];
+    for (let i = 0; i < vortexCount; i++) {
+      const arm = i % 3;
+      vSeed[i * 4] = rand();
+      vSeed[i * 4 + 1] = arm / 3;
+      vSeed[i * 4 + 2] = rand();
+      vSeed[i * 4 + 3] = rand();
+      const c = palette[rand() < 0.62 ? (rand() < 0.6 ? 0 : 1) : rand() < 0.55 ? 2 : 3];
+      vCol[i * 3] = c.r;
+      vCol[i * 3 + 1] = c.g;
+      vCol[i * 3 + 2] = c.b;
+    }
+    const vortexGeo = new THREE.BufferGeometry();
+    vortexGeo.setAttribute('position', new THREE.BufferAttribute(vPos, 3));
+    vortexGeo.setAttribute('aSeed', new THREE.BufferAttribute(vSeed, 4));
+    vortexGeo.setAttribute('aColor', new THREE.BufferAttribute(vCol, 3));
+    vortexGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 60);
+    this.vortexMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uConverge: { value: 0 },
+        uOpacity: { value: 0 },
+        uPixelRatio: { value: pixelRatio },
+      },
+      vertexShader: /* glsl */ `
+        attribute vec4 aSeed;
+        attribute vec3 aColor;
+        uniform float uTime;
+        uniform float uConverge;
+        uniform float uPixelRatio;
+        varying vec3 vColor;
+        varying float vFade;
+        void main() {
+          float flow = fract(aSeed.x - uTime * (0.018 + 0.05 * uConverge));
+          float outer = mix(30.0, 6.0, uConverge);
+          float r = mix(1.2, outer, pow(flow, 1.35));
+          float theta = aSeed.y * 6.2831853 + log(r) * 2.6 + uTime * (0.08 + 0.35 * uConverge) / max(r * 0.12, 0.25);
+          float spread = (aSeed.z - 0.5) * r * 0.22;
+          vec3 p = vec3(cos(theta) * r + spread, (aSeed.w - 0.5) * r * 0.08, sin(theta) * r - spread);
+          p.yz = mat2(0.9553, -0.2955, 0.2955, 0.9553) * p.yz;
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_Position = projectionMatrix * mv;
+          vColor = mix(aColor, vec3(1.0, 0.97, 0.9), smoothstep(5.0, 1.2, r));
+          vFade = smoothstep(0.0, 0.08, flow) * smoothstep(1.0, 0.75, flow);
+          gl_PointSize = (0.55 + aSeed.z * 1.4) * uPixelRatio * (240.0 / -mv.z);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uOpacity;
+        varying vec3 vColor;
+        varying float vFade;
+        void main() {
+          vec2 c = gl_PointCoord - 0.5;
+          float d = dot(c, c);
+          float a = exp(-d * 16.0) * vFade * uOpacity;
+          if (a < 0.004) discard;
+          gl_FragColor = vec4(vColor * a, a);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
+    this.vortex = new THREE.Points(vortexGeo, this.vortexMat);
+    this.convergenceGroup.add(this.vortex);
+    this.disposables.push(vortexGeo, this.vortexMat);
 
     // True Geodesic Raymarched Convergence Portal bending 4K Milky Way starlight as it collapses into silence
     const fallbackTex = new THREE.DataTexture(new Uint8Array([1, 2, 6, 255]), 1, 1);
@@ -230,17 +277,12 @@ export class TitleReveal {
     this.convergenceGroup.visible = preSilence > 0.005;
     this.convergenceGeodesicMesh.visible = preSilence > 0.005;
     if (this.convergenceGroup.visible) {
-      this.convergenceGroup.scale.setScalar(ringScale);
-      this.convergenceGroup.rotation.y = elapsed * 0.25;
-      for (let i = 0; i < this.convergenceRings.length; i++) {
-        const ring = this.convergenceRings[i];
-        ring.rotation.x += 0.004 * (i + 1);
-        ring.rotation.z -= 0.003 * (i + 1);
-        const mat = ring.material as THREE.MeshStandardMaterial;
-        mat.opacity = (ring.userData.baseOp as number) * weight * preSilence;
-      }
+      this.vortexMat.uniforms.uTime.value = elapsed;
+      this.vortexMat.uniforms.uConverge.value = convergeTight;
+      this.vortexMat.uniforms.uOpacity.value = (0.8 + 0.2 * convergeTight) * weight * preSilence;
+      this.vortex.visible = this.vortexMat.uniforms.uOpacity.value > 0.004;
       this.convergenceGeodesicMat.uniforms.uTime.value = elapsed * 1.25;
-      this.convergenceGeodesicMat.uniforms.uOpacity.value = weight * preSilence * 0.94;
+      this.convergenceGeodesicMat.uniforms.uOpacity.value = weight * preSilence * 0.72;
       this.convergenceGeodesicMat.uniforms.uHorizonRadius.value = 2.35 * ringScale;
       this.convergenceGeodesicMat.uniforms.uDiskOuterRadius.value = 12.6 * ringScale;
     }

@@ -72,11 +72,33 @@ export function NarrationOverlay({
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between">
+      {/* Cinematic chapter title card: centered, upper third, held for the first beats of each chapter */}
+      <div
+        aria-hidden={!showChapterTitle}
+        className="absolute inset-x-0 top-[22%] flex flex-col items-center text-center px-6 transition-all duration-[1600ms] ease-out"
+        style={{
+          opacity: showChapterTitle ? 1 : 0,
+          transform: showChapterTitle ? 'translateY(0)' : 'translateY(-6px)',
+          letterSpacing: showChapterTitle ? '0.02em' : '0.08em',
+        }}
+      >
+        <p className="text-[11px] sm:text-xs tracking-[0.5em] pl-[0.5em] uppercase text-[#d8b878] font-medium">
+          {chapter.roman}
+        </p>
+        <span
+          className="block h-px mt-4 mb-4 bg-gradient-to-r from-transparent via-[#e4c17a]/70 to-transparent transition-all duration-[2200ms] ease-out"
+          style={{ width: showChapterTitle ? '9rem' : '0rem' }}
+        />
+        <p className="font-display text-3xl sm:text-5xl font-light text-[#f4eee2] cinema-text-shadow">
+          {chapter.title}
+        </p>
+      </div>
+
       {/* Top Zone: Subtle chapter anchor (left) + Ephemeris facts in Chapter I (right) */}
       <div className="flex items-start justify-between gap-6 px-6 sm:px-10 pt-6 sm:pt-8">
         <div
-          className="transition-opacity duration-700"
-          style={{ opacity: showChapterTitle ? 0.92 : 0.42 }}
+          className="transition-opacity duration-1000"
+          style={{ opacity: showChapterTitle ? 0 : 0.42 }}
         >
           <p className="text-[11px] tracking-[0.28em] uppercase text-[#d8b878] font-medium">
             {chapter.roman}

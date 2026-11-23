@@ -88,6 +88,9 @@ const _taaJitter: TaaJitterOffset = {
 };
 
 function detectSoftwareGl(): boolean {
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('hq') === '1') {
+    return false;
+  }
   try {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');

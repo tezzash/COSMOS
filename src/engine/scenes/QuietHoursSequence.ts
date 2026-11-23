@@ -1,269 +1,320 @@
 import * as THREE from 'three';
 import { getChapterWeight, smoothstep } from '../../data/chapters';
-import {
-  ATMOSPHERE_FRAGMENT_SHADER,
-  ATMOSPHERE_VERTEX_SHADER,
-  createSoftGlowTexture,
-} from '../shaders';
+import { createSoftGlowTexture } from '../shaders';
 
-function createQuietPlanetTexture(maxAnisotropy: number): THREE.CanvasTexture {
-  const w = 512;
-  const h = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d')!;
-
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#131d33');
-  grad.addColorStop(0.5, '#0f1729');
-  grad.addColorStop(1, '#090e1c');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  let s = 918273;
-  const rand = () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
-  for (let i = 0; i < 120; i++) {
-    const x = rand() * w;
-    const y = rand() * h;
-    const rx = 18 + rand() * 54;
-    const ry = 8 + rand() * 20;
-    const g = ctx.createRadialGradient(x, y, 2, x, y, rx);
-    g.addColorStop(0, 'rgba(72, 95, 138, 0.16)');
-    g.addColorStop(1, 'rgba(15, 23, 41, 0)');
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(1, ry / rx);
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(0, 0, rx, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+const NIGHT_EARTH_VERTEX = /* glsl */ `
+  varying vec2 vUv;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  void main() {
+    vUv = uv;
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
   }
+`;
 
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = maxAnisotropy;
-  return tex;
-}
+const NIGHT_EARTH_FRAGMENT = /* glsl */ `
+  uniform sampler2D uDay;
+  uniform sampler2D uNight;
+  uniform vec3 uSunDir;
+  uniform float uOpacity;
+  uniform float uDawn;
+  uniform float uHasTex;
+  varying vec2 vUv;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  void main() {
+    vec3 n = normalize(vWorldNormal);
+    vec3 v = normalize(cameraPosition - vWorldPos);
+    float d = dot(n, uSunDir);
+    float day = smoothstep(-0.06, 0.32, d);
+
+    vec3 dayTex = mix(vec3(0.05, 0.08, 0.14), texture2D(uDay, vUv).rgb, uHasTex);
+    vec3 nightTex = mix(vec3(0.0), texture2D(uNight, vUv).rgb, uHasTex);
+
+    vec3 moonlit = dayTex * vec3(0.42, 0.52, 0.85) * 0.055;
+    vec3 sunlit = dayTex * (1.25 * day);
+    float lum = dot(nightTex, vec3(0.299, 0.587, 0.114));
+    vec3 cities = vec3(1.0, 0.72, 0.38) * pow(lum, 1.35) * 3.6 * (1.0 - day);
+
+    float terminator = exp(-pow(d * 6.5, 2.0));
+    vec3 dawnBand = vec3(1.0, 0.42, 0.16) * terminator * (0.1 + 0.32 * uDawn);
+
+    float rim = pow(1.0 - max(dot(n, v), 0.0), 3.2);
+    vec3 rimCol = mix(vec3(0.16, 0.32, 0.85), vec3(1.0, 0.62, 0.32), smoothstep(-0.35, 0.3, d));
+
+    vec3 col = moonlit + sunlit + cities + dawnBand + rimCol * rim * 0.75;
+    gl_FragColor = vec4(col, uOpacity);
+  }
+`;
+
+const ATMOSPHERE_SHELL_VERTEX = /* glsl */ `
+  varying vec3 vViewNormal;
+  varying vec3 vWorldNormal;
+  void main() {
+    vViewNormal = normalize(normalMatrix * normal);
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const ATMOSPHERE_SHELL_FRAGMENT = /* glsl */ `
+  uniform vec3 uSunDir;
+  uniform float uIntensity;
+  uniform float uDawn;
+  varying vec3 vViewNormal;
+  varying vec3 vWorldNormal;
+  void main() {
+    // Back faces: k = 0 at the outer edge of the shell, ~0.29 at the planet limb
+    float k = -vViewNormal.z;
+    float glow = pow(smoothstep(0.0, 0.28, k), 1.6) * (1.0 - smoothstep(0.28, 0.42, k)) * 1.6;
+    float sunSide = smoothstep(-0.4, 0.6, dot(normalize(vWorldNormal), uSunDir));
+    vec3 col = mix(vec3(0.18, 0.38, 1.0), vec3(1.0, 0.56, 0.24), sunSide * (0.35 + 0.65 * uDawn));
+    float a = glow * uIntensity * (0.55 + sunSide * (0.6 + 1.4 * uDawn));
+    gl_FragColor = vec4(col * a, a);
+  }
+`;
+
+const AURORA_VERTEX = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const AURORA_FRAGMENT = /* glsl */ `
+  uniform float uTime;
+  uniform float uOpacity;
+  varying vec2 vUv;
+  void main() {
+    float x = vUv.x * 46.0;
+    float curtain = 0.55 + 0.45 * sin(x + uTime * 0.35 + sin(x * 0.37 - uTime * 0.21) * 2.4);
+    curtain *= 0.6 + 0.4 * sin(x * 2.7 - uTime * 0.6);
+    float vertical = smoothstep(0.0, 0.12, vUv.y) * pow(1.0 - vUv.y, 1.8);
+    vec3 col = mix(vec3(0.15, 0.95, 0.55), vec3(0.55, 0.3, 0.95), smoothstep(0.35, 1.0, vUv.y));
+    float a = curtain * vertical * uOpacity;
+    gl_FragColor = vec4(col * a, a);
+  }
+`;
+
+const MOON_FRAGMENT = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform vec3 uSunDir;
+  uniform float uOpacity;
+  uniform float uHasTex;
+  varying vec2 vUv;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  void main() {
+    vec3 tex = mix(vec3(0.55), texture2D(uMap, vUv).rgb, uHasTex);
+    float l = smoothstep(-0.05, 0.4, dot(normalize(vWorldNormal), uSunDir));
+    vec3 col = tex * (0.025 + 1.15 * l);
+    gl_FragColor = vec4(col, uOpacity);
+  }
+`;
+
+const PLANET_RADIUS = 15;
+const PLANET_CENTER = new THREE.Vector3(0, -17, -6);
+const SUN_NIGHT = new THREE.Vector3(0.9, -0.42, -1.2).normalize();
+const SUN_DAWN = new THREE.Vector3(1.0, 0.02, -0.75).normalize();
 
 /**
  * Chapter V: Even Stars Have Quiet Hours (centered at 0, -2, -425).
- * Peaceful moonlit planetary horizon with a composite 8-part observatory sanctuary,
- * softly lit warm amber window, calm seated silhouette gazing out peacefully,
- * and a gentle golden sunrise wash at the close of the chapter.
+ * Earth seen from low orbit on its night side: amber city lights, a breathing auroral oval,
+ * a thin atmospheric limb, a crescent Moon, one warm light still burning below, and a
+ * real sunrise sweeping over the limb as the chapter closes.
  */
 export class QuietHoursSequence {
   public readonly root = new THREE.Group();
 
-  private readonly planetAtmoMat: THREE.ShaderMaterial;
-  private readonly windowGlowMat: THREE.MeshStandardMaterial;
-  private readonly windowLight: THREE.PointLight;
-  private readonly sunriseGlow: THREE.Sprite;
-  private readonly silhouetteGroup = new THREE.Group();
+  private readonly earth: THREE.Mesh;
+  private readonly earthMat: THREE.ShaderMaterial;
+  private readonly atmoMat: THREE.ShaderMaterial;
+  private readonly auroraMat: THREE.ShaderMaterial;
+  private readonly moonMat: THREE.ShaderMaterial;
+  private readonly sunGlow: THREE.Sprite;
+  private readonly sunCore: THREE.Sprite;
+  private readonly beacon: THREE.Sprite;
   private readonly quietMotes: THREE.Points;
+  private readonly sunDir = new THREE.Vector3();
   private readonly disposables: Array<{ dispose: () => void }> = [];
 
   constructor(maxAnisotropy: number) {
     this.root.position.set(0, -2, -425);
 
-    // 1. Peaceful Moonlit Planet Curving Horizon Below
-    const planetRadius = 26;
-    const planetTex = createQuietPlanetTexture(maxAnisotropy);
-    const planetGeo = new THREE.SphereGeometry(planetRadius, 56, 40);
-    const planetMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: planetTex,
-      roughness: 0.88,
-      metalness: 0.08,
-    });
-    const planet = new THREE.Mesh(planetGeo, planetMat);
-    planet.position.set(0, -planetRadius - 2.2, 0);
-    this.root.add(planet);
+    const loader = new THREE.TextureLoader();
+    const load = (url: string, onReady: (tex: THREE.Texture) => void) =>
+      loader.load(url, (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = maxAnisotropy;
+        this.disposables.push(tex);
+        onReady(tex);
+      });
 
-    const atmoGeo = new THREE.SphereGeometry(planetRadius + 0.9, 48, 36);
-    this.planetAtmoMat = new THREE.ShaderMaterial({
-      vertexShader: ATMOSPHERE_VERTEX_SHADER,
-      fragmentShader: ATMOSPHERE_FRAGMENT_SHADER,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
+    // 1. Night-side Earth
+    this.earthMat = new THREE.ShaderMaterial({
       uniforms: {
-        uSunDir: { value: new THREE.Vector3(0.4, 0.55, -0.7).normalize() },
-        uDayColor: { value: new THREE.Color('#6f93c9') },
-        uSunriseColor: { value: new THREE.Color('#f4ba6a') },
-        uIntensity: { value: 0.85 },
+        uDay: { value: null },
+        uNight: { value: null },
+        uSunDir: { value: SUN_NIGHT.clone() },
+        uOpacity: { value: 0 },
+        uDawn: { value: 0 },
+        uHasTex: { value: 0 },
       },
-    });
-    const planetAtmo = new THREE.Mesh(atmoGeo, this.planetAtmoMat);
-    planetAtmo.position.copy(planet.position);
-    this.root.add(planetAtmo);
-    this.disposables.push(planetTex, planetGeo, planetMat, atmoGeo, this.planetAtmoMat);
-
-    // 2. Composite Sanctuary Terrace & Softly Illuminated Arched Window (resting flush on planet crown)
-    const sanctuary = new THREE.Group();
-    sanctuary.position.set(0, -2.28, 0);
-
-    const stoneMat = new THREE.MeshStandardMaterial({
-      color: 0x1a2236,
-      roughness: 0.86,
-      metalness: 0.08,
-    });
-    const woodTrimMat = new THREE.MeshStandardMaterial({
-      color: 0x2e2624,
-      roughness: 0.62,
-      metalness: 0.14,
-    });
-    const brassMat = new THREE.MeshStandardMaterial({
-      color: 0xd7b272,
-      roughness: 0.28,
-      metalness: 0.88,
-    });
-    this.windowGlowMat = new THREE.MeshStandardMaterial({
-      color: 0xffd799,
-      emissive: 0xf2b562,
-      emissiveIntensity: 1.45,
-      roughness: 0.25,
-      metalness: 0.05,
-    });
-
-    // Grounded stone terrace plinth
-    const plinthGeo = new THREE.CylinderGeometry(4.4, 4.9, 0.45, 32);
-    const plinth = new THREE.Mesh(plinthGeo, stoneMat);
-    plinth.position.set(0, 0.12, 0);
-
-    // Warm spilled floor light pool (offset +0.02 on Y to prevent Z-fighting)
-    const glowTex = createSoftGlowTexture('#ffe2ad', '#e8aa54');
-    const spillGeo = new THREE.CircleGeometry(3.2, 32);
-    const spillMat = new THREE.MeshBasicMaterial({
-      map: glowTex,
-      color: 0xffcf87,
+      vertexShader: NIGHT_EARTH_VERTEX,
+      fragmentShader: NIGHT_EARTH_FRAGMENT,
       transparent: true,
-      opacity: 0.34,
+    });
+    let texReady = 0;
+    const markReady = () => {
+      texReady++;
+      if (texReady === 2) this.earthMat.uniforms.uHasTex.value = 1;
+    };
+    load('/textures/earth_day_4k.jpg', (tex) => {
+      this.earthMat.uniforms.uDay.value = tex;
+      markReady();
+    });
+    load('/textures/earth_night_4k.jpg', (tex) => {
+      this.earthMat.uniforms.uNight.value = tex;
+      markReady();
+    });
+
+    const earthGeo = new THREE.SphereGeometry(PLANET_RADIUS, 128, 96);
+    this.earth = new THREE.Mesh(earthGeo, this.earthMat);
+    this.earth.position.copy(PLANET_CENTER);
+    this.earth.rotation.set(0.42, -1.9, 0.08);
+    this.root.add(this.earth);
+
+    // 2. Atmospheric limb
+    this.atmoMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uSunDir: { value: SUN_NIGHT.clone() },
+        uIntensity: { value: 0 },
+        uDawn: { value: 0 },
+      },
+      vertexShader: ATMOSPHERE_SHELL_VERTEX,
+      fragmentShader: ATMOSPHERE_SHELL_FRAGMENT,
+      side: THREE.BackSide,
+      transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-    const floorSpill = new THREE.Mesh(spillGeo, spillMat);
-    floorSpill.rotation.x = -Math.PI / 2;
-    floorSpill.position.set(0, 0.37, 1.0);
+    const atmoGeo = new THREE.SphereGeometry(PLANET_RADIUS * 1.045, 96, 64);
+    const atmo = new THREE.Mesh(atmoGeo, this.atmoMat);
+    atmo.position.copy(PLANET_CENTER);
+    this.root.add(atmo);
 
-    // Sanctuary wall with framed recessed window
-    const leftWallGeo = new THREE.BoxGeometry(2.1, 4.6, 0.55);
-    const leftWall = new THREE.Mesh(leftWallGeo, stoneMat);
-    leftWall.position.set(-2.35, 2.55, -0.45);
-    const rightWall = new THREE.Mesh(leftWallGeo, stoneMat);
-    rightWall.position.set(2.35, 2.55, -0.45);
-
-    const sillGeo = new THREE.BoxGeometry(2.85, 0.85, 0.72);
-    const sill = new THREE.Mesh(sillGeo, stoneMat);
-    sill.position.set(0, 0.76, -0.42);
-
-    const lintelGeo = new THREE.BoxGeometry(6.8, 0.65, 0.65);
-    const lintel = new THREE.Mesh(lintelGeo, stoneMat);
-    lintel.position.set(0, 4.95, -0.45);
-
-    // Warm illuminated window pane
-    const paneGeo = new THREE.PlaneGeometry(2.6, 3.45);
-    const pane = new THREE.Mesh(paneGeo, this.windowGlowMat);
-    pane.position.set(0, 2.9, -0.58);
-
-    // Fine mullions dividing the warm window softly
-    const vMullionGeo = new THREE.BoxGeometry(0.08, 3.5, 0.14);
-    const vMullion = new THREE.Mesh(vMullionGeo, woodTrimMat);
-    vMullion.position.set(0, 2.9, -0.5);
-    const hMullionGeo = new THREE.BoxGeometry(2.65, 0.08, 0.14);
-    const hMullion1 = new THREE.Mesh(hMullionGeo, woodTrimMat);
-    hMullion1.position.set(0, 3.4, -0.5);
-    const hMullion2 = new THREE.Mesh(hMullionGeo, woodTrimMat);
-    hMullion2.position.set(0, 2.25, -0.5);
-
-    // Small resting warm lantern on the window sill
-    const lanternBaseGeo = new THREE.CylinderGeometry(0.14, 0.18, 0.08, 12);
-    const lanternBodyGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.28, 12);
-    const lanternBase = new THREE.Mesh(lanternBaseGeo, brassMat);
-    lanternBase.position.set(0.95, 1.24, -0.2);
-    const lanternBody = new THREE.Mesh(lanternBodyGeo, this.windowGlowMat);
-    lanternBody.position.set(0.95, 1.4, -0.2);
-
-    sanctuary.add(
-      plinth,
-      floorSpill,
-      leftWall,
-      rightWall,
-      sill,
-      lintel,
-      pane,
-      vMullion,
-      hMullion1,
-      hMullion2,
-      lanternBase,
-      lanternBody,
+    // 3. Auroral oval hugging the polar cap
+    this.auroraMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uOpacity: { value: 0 } },
+      vertexShader: AURORA_VERTEX,
+      fragmentShader: AURORA_FRAGMENT,
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const lat = THREE.MathUtils.degToRad(68);
+    const auroraGeo = new THREE.CylinderGeometry(
+      PLANET_RADIUS * Math.cos(lat) * 1.04,
+      PLANET_RADIUS * Math.cos(lat),
+      1.5,
+      160,
+      1,
+      true,
     );
+    const aurora = new THREE.Mesh(auroraGeo, this.auroraMat);
+    aurora.position.set(0, PLANET_RADIUS * Math.sin(lat) + 0.7, 0);
+    const auroraPivot = new THREE.Group();
+    auroraPivot.position.copy(PLANET_CENTER);
+    auroraPivot.rotation.set(-0.5, 0, 0.22);
+    auroraPivot.add(aurora);
+    this.root.add(auroraPivot);
 
-    // 3. Calm, Peaceful Seated Silhouette on the Window Bench (graceful, safe, unhurried)
-    const silMat = new THREE.MeshStandardMaterial({
-      color: 0x0b0f1b,
-      roughness: 0.78,
-      metalness: 0.06,
-    });
-    const headGeo = new THREE.SphereGeometry(0.24, 18, 16);
-    const torsoGeo = new THREE.CapsuleGeometry(0.22, 0.62, 8, 14);
-    const kneeGeo = new THREE.CapsuleGeometry(0.13, 0.48, 8, 12);
-
-    const head = new THREE.Mesh(headGeo, silMat);
-    head.position.set(-0.36, 2.38, -0.18);
-    const torso = new THREE.Mesh(torsoGeo, silMat);
-    torso.position.set(-0.42, 1.72, -0.22);
-    torso.rotation.z = -0.1;
-    const legs = new THREE.Mesh(kneeGeo, silMat);
-    legs.position.set(-0.08, 1.44, -0.14);
-    legs.rotation.z = Math.PI * 0.42;
-
-    this.silhouetteGroup.add(head, torso, legs);
-    sanctuary.add(this.silhouetteGroup);
-
-    // Soft warm interior point light
-    this.windowLight = new THREE.PointLight(0xf6be73, 3.2, 22, 1.7);
-    this.windowLight.position.set(0, 2.7, 0.8);
-    sanctuary.add(this.windowLight);
-
-    this.root.add(sanctuary);
-
-    // 4. Warm Golden Sunrise Bloom (rises gently behind the sanctuary at the close of Chapter V)
-    const sunriseTex = createSoftGlowTexture('#fff3d4', '#f4b55c');
-    const sunriseMat = new THREE.SpriteMaterial({
-      map: sunriseTex,
-      color: 0xffd185,
+    // 4. Crescent Moon
+    this.moonMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uMap: { value: null },
+        uSunDir: { value: SUN_NIGHT.clone() },
+        uOpacity: { value: 0 },
+        uHasTex: { value: 0 },
+      },
+      vertexShader: NIGHT_EARTH_VERTEX,
+      fragmentShader: MOON_FRAGMENT,
       transparent: true,
-      opacity: 0,
+    });
+    load('/textures/moon_4k.jpg', (tex) => {
+      this.moonMat.uniforms.uMap.value = tex;
+      this.moonMat.uniforms.uHasTex.value = 1;
+    });
+    const moonGeo = new THREE.SphereGeometry(1.05, 64, 48);
+    const moon = new THREE.Mesh(moonGeo, this.moonMat);
+    moon.position.set(-10.5, 7.2, -26);
+    this.root.add(moon);
+
+    // 5. Sun rising behind the limb
+    const sunGlowTex = createSoftGlowTexture('#fff3dc', '#ff9a4a', 'rgba(0,0,0,0)', 256);
+    const sunGlowMat = new THREE.SpriteMaterial({
+      map: sunGlowTex,
+      transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      opacity: 0,
     });
-    this.sunriseGlow = new THREE.Sprite(sunriseMat);
-    this.sunriseGlow.position.set(2.5, 2.2, -10.0);
-    this.sunriseGlow.scale.set(24, 18, 1);
-    this.root.add(this.sunriseGlow);
+    this.sunGlow = new THREE.Sprite(sunGlowMat);
+    this.sunGlow.position.set(13.5, -2.6, -40);
+    this.root.add(this.sunGlow);
 
-    // 5. Minimal calm drifting moonlight dust motes (very sparse for tranquility)
-    const moteCount = 48;
-    const moteGeo = new THREE.BufferGeometry();
+    const sunCoreTex = createSoftGlowTexture('#ffffff', '#fff1d0', 'rgba(0,0,0,0)', 128);
+    const sunCoreMat = new THREE.SpriteMaterial({
+      map: sunCoreTex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      opacity: 0,
+    });
+    this.sunCore = new THREE.Sprite(sunCoreMat);
+    this.sunCore.position.copy(this.sunGlow.position);
+    this.root.add(this.sunCore);
+
+    // 6. One warm light still burning on the night side (rotates with Earth)
+    const beaconTex = createSoftGlowTexture('#fffaf0', '#ffc46b', 'rgba(0,0,0,0)', 128);
+    const beaconMat = new THREE.SpriteMaterial({
+      map: beaconTex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      opacity: 0,
+    });
+    this.beacon = new THREE.Sprite(beaconMat);
+    const beaconWorldDir = new THREE.Vector3(-0.12, 0.93, 0.35).normalize();
+    const invRot = new THREE.Quaternion().setFromEuler(this.earth.rotation).invert();
+    this.beacon.position.copy(beaconWorldDir.applyQuaternion(invRot).multiplyScalar(PLANET_RADIUS * 1.004));
+    this.earth.add(this.beacon);
+
+    // 7. Drifting quiet motes
+    const moteCount = 260;
     const motePos = new Float32Array(moteCount * 3);
+    let seed = 52731;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
     for (let i = 0; i < moteCount; i++) {
-      motePos[i * 3] = (Math.sin(i * 12.7) * 0.5) * 16;
-      motePos[i * 3 + 1] = (Math.cos(i * 7.3) * 0.5 + 0.35) * 8;
-      motePos[i * 3 + 2] = Math.sin(i * 3.1) * 7;
+      motePos[i * 3] = (rand() - 0.5) * 40;
+      motePos[i * 3 + 1] = rand() * 14 - 2;
+      motePos[i * 3 + 2] = (rand() - 0.5) * 30 - 4;
     }
+    const moteGeo = new THREE.BufferGeometry();
     moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos, 3));
     const moteMat = new THREE.PointsMaterial({
-      size: 0.35,
-      map: glowTex,
-      color: 0xe6d9bf,
+      color: 0xbfd2ff,
+      size: 0.05,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
@@ -271,28 +322,20 @@ export class QuietHoursSequence {
     this.root.add(this.quietMotes);
 
     this.disposables.push(
-      stoneMat,
-      woodTrimMat,
-      brassMat,
-      this.windowGlowMat,
-      plinthGeo,
-      glowTex,
-      spillGeo,
-      spillMat,
-      leftWallGeo,
-      sillGeo,
-      lintelGeo,
-      paneGeo,
-      vMullionGeo,
-      hMullionGeo,
-      lanternBaseGeo,
-      lanternBodyGeo,
-      silMat,
-      headGeo,
-      torsoGeo,
-      kneeGeo,
-      sunriseTex,
-      sunriseMat,
+      earthGeo,
+      this.earthMat,
+      atmoGeo,
+      this.atmoMat,
+      auroraGeo,
+      this.auroraMat,
+      moonGeo,
+      this.moonMat,
+      sunGlowTex,
+      sunGlowMat,
+      sunCoreTex,
+      sunCoreMat,
+      beaconTex,
+      beaconMat,
       moteGeo,
       moteMat,
     );
@@ -303,21 +346,44 @@ export class QuietHoursSequence {
     this.root.visible = weight > 0.004;
     if (!this.root.visible) return;
 
-    // Gentle sunrise warmth emerges during the closing 12 seconds of Chapter V (322..335)
-    const dawn = smoothstep(321, 334, filmTime);
+    // Sunrise sweeps over the limb in the closing seconds of Chapter V
+    const dawn = smoothstep(320, 334, filmTime);
+    this.sunDir.lerpVectors(SUN_NIGHT, SUN_DAWN, dawn).normalize();
 
-    this.windowLight.intensity = (2.8 + dawn * 2.4 + Math.sin(elapsed * 0.7) * 0.12) * weight;
-    this.windowGlowMat.emissiveIntensity = 1.3 + dawn * 0.8;
-    this.planetAtmoMat.uniforms.uIntensity.value = (0.75 + dawn * 0.65) * weight;
+    this.earth.rotation.y = -1.9 + elapsed * 0.0035;
 
-    this.sunriseGlow.material.opacity = dawn * 0.85 * weight;
-    const sunScale = 18 + dawn * 18;
-    this.sunriseGlow.scale.set(sunScale * 1.35, sunScale, 1);
+    const eu = this.earthMat.uniforms;
+    eu.uOpacity.value = weight;
+    eu.uDawn.value = dawn;
+    eu.uSunDir.value.copy(this.sunDir);
 
-    // Almost still, restful breathing
-    this.silhouetteGroup.position.y = Math.sin(elapsed * 0.55) * 0.025;
-    this.quietMotes.rotation.y = elapsed * 0.012;
-    (this.quietMotes.material as THREE.PointsMaterial).opacity = 0.42 * weight;
+    const au = this.atmoMat.uniforms;
+    au.uIntensity.value = 1.35 * weight;
+    au.uDawn.value = dawn;
+    au.uSunDir.value.copy(this.sunDir);
+
+    this.auroraMat.uniforms.uTime.value = elapsed;
+    this.auroraMat.uniforms.uOpacity.value =
+      (0.32 + 0.12 * Math.sin(elapsed * 0.4)) * (1 - dawn * 0.75) * weight;
+
+    this.moonMat.uniforms.uOpacity.value = weight;
+    this.moonMat.uniforms.uSunDir.value.copy(this.sunDir);
+
+    const rise = smoothstep(0, 1, dawn);
+    this.sunGlow.position.y = -5.0 + rise * 3.2;
+    this.sunCore.position.y = this.sunGlow.position.y;
+    this.sunGlow.material.opacity = rise * 0.8 * weight;
+    const glowScale = 6 + rise * 12;
+    this.sunGlow.scale.set(glowScale * 1.6, glowScale, 1);
+    this.sunCore.material.opacity = smoothstep(0.35, 1, dawn) * weight;
+    this.sunCore.scale.setScalar(1.0 + rise * 1.2);
+
+    const breath = 0.5 + 0.5 * Math.sin(elapsed * 0.9);
+    this.beacon.material.opacity = (0.75 + 0.25 * breath) * weight * (1 - dawn * 0.4);
+    this.beacon.scale.setScalar(0.42 + breath * 0.14);
+
+    this.quietMotes.rotation.y = elapsed * 0.01;
+    (this.quietMotes.material as THREE.PointsMaterial).opacity = 0.38 * weight;
   }
 
   public dispose(): void {

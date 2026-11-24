@@ -83,6 +83,7 @@ export class TitleReveal {
     this.convergenceGeodesicMat = new THREE.ShaderMaterial({
       vertexShader: GEODESIC_SINGULARITY_VERTEX_SHADER,
       fragmentShader: GEODESIC_SINGULARITY_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       side: THREE.BackSide,
@@ -150,6 +151,7 @@ export class TitleReveal {
     this.burstMat = new THREE.ShaderMaterial({
       vertexShader: BIG_BANG_VERTEX_SHADER,
       fragmentShader: BIG_BANG_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -310,6 +312,12 @@ export class TitleReveal {
     }
     if (this.convergenceGeodesicMat.uniforms.uHasMilkyWay) {
       this.convergenceGeodesicMat.uniforms.uHasMilkyWay.value = 1.0;
+    }
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    if (this.burstMat.uniforms.uPixelRatio) {
+      this.burstMat.uniforms.uPixelRatio.value = pixelRatio;
     }
   }
 

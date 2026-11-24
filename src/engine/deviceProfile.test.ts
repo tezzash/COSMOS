@@ -3,10 +3,14 @@ import { test } from 'vitest';
 import {
   AdaptiveQualityController,
   detectDeviceProfile,
+  formatQualityModeLabel,
+  getNextQualityMode,
   getQualitySettingsForTier,
+  getShaderPrecisionForEffect,
+  resolveEffectiveDpr,
 } from './deviceProfile';
 
-test('detectDeviceProfile accurately identifies iPhone 17 Pro Max in both portrait and landscape', () => {
+test('detectDeviceProfile accurately identifies iPhone Pro Max high-PPI OLED in landscape and keeps Yin-Yang parity', () => {
   const iphoneLandscape = detectDeviceProfile({
     userAgent:
       'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1',
@@ -26,18 +30,34 @@ test('detectDeviceProfile accurately identifies iPhone 17 Pro Max in both portra
   assert.equal(iphoneLandscape.isIOS, true);
   assert.equal(iphoneLandscape.isIOSSafari, true);
   assert.equal(iphoneLandscape.isIPhoneProMaxClass, true);
+  assert.equal(iphoneLandscape.isHighPpi, true);
   assert.equal(iphoneLandscape.initialTier, 'HIGH');
   assert.equal(iphoneLandscape.targetFps, 60);
 
   const highSettings = getQualitySettingsForTier('HIGH', iphoneLandscape, false);
+  const balancedSettings = getQualitySettingsForTier('BALANCED', iphoneLandscape, false);
   const thermalSettings = getQualitySettingsForTier('THERMAL-SAFE', iphoneLandscape, false);
-  assert.ok(highSettings.maxDpr <= 2.0, 'iPhone 17 Pro Max caps WebGL DPR below 3x native');
-  assert.ok(thermalSettings.maxDpr < highSettings.maxDpr);
+
+  // High-PPI 3x OLED dynamically scales DPR smoothly across quality tiers
+  assert.equal(resolveEffectiveDpr(3, highSettings), 2.0);
+  assert.equal(resolveEffectiveDpr(3, balancedSettings), 1.65);
+  assert.equal(resolveEffectiveDpr(3, thermalSettings), 1.25);
+
+  // Mobile shader tier uses mediump for non-critical ambient shaders while preserving highp hero parity
+  assert.equal(getShaderPrecisionForEffect('ambient', iphoneLandscape, 'HIGH'), 'mediump');
+  assert.equal(getShaderPrecisionForEffect('ambient', iphoneLandscape, 'BALANCED'), 'mediump');
+  assert.equal(getShaderPrecisionForEffect('hero', iphoneLandscape, 'HIGH'), 'highp');
+  assert.equal(getShaderPrecisionForEffect('hero', iphoneLandscape, 'THERMAL-SAFE'), 'highp');
+
+  // Central Yin-Yang set piece retains high mobile particle parity (>= 0.85 on high-PPI phones)
+  assert.ok(highSettings.yinYangScaleFactor >= 0.85);
+  assert.equal(highSettings.yinYangDrawRatio, 1.0);
+  assert.ok(balancedSettings.yinYangDrawRatio >= 0.88);
   assert.ok(thermalSettings.particleDrawRatio < highSettings.particleDrawRatio);
   assert.equal(thermalSettings.gpgpuEnabled, false);
 });
 
-test('detectDeviceProfile respects desktop browsers and reduced motion preference', () => {
+test('detectDeviceProfile respects desktop browsers, shader tiers, and reduced motion preference', () => {
   const desktop = detectDeviceProfile({
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
     platform: 'MacIntel',
@@ -54,15 +74,44 @@ test('detectDeviceProfile respects desktop browsers and reduced motion preferenc
 
   assert.equal(desktop.isMobile, false);
   assert.equal(desktop.isIOS, false);
+  assert.equal(desktop.isHighPpi, false);
   assert.equal(desktop.prefersReducedMotion, true);
   assert.equal(desktop.initialTier, 'HIGH');
+
+  assert.equal(getShaderPrecisionForEffect('ambient', desktop, 'HIGH'), 'highp');
+  assert.equal(getShaderPrecisionForEffect('ambient', desktop, 'BALANCED'), 'mediump');
+  assert.equal(getShaderPrecisionForEffect('hero', desktop, 'BALANCED'), 'highp');
+
+  assert.equal(resolveEffectiveDpr(2, getQualitySettingsForTier('HIGH', desktop, false)), 2);
+  assert.equal(resolveEffectiveDpr(2, getQualitySettingsForTier('BALANCED', desktop, false)), 1.5);
+  assert.equal(resolveEffectiveDpr(2, getQualitySettingsForTier('THERMAL-SAFE', desktop, false)), 1.2);
+  assert.equal(resolveEffectiveDpr(1, getQualitySettingsForTier('HIGH', desktop, false)), 1);
 });
 
-test('AdaptiveQualityController steps down under sustained slow frames and recovers with headroom', () => {
+test('QualityMode cycles cleanly through Auto -> High -> Balanced -> Saver -> Auto', () => {
+  assert.equal(getNextQualityMode('auto'), 'high');
+  assert.equal(getNextQualityMode('high'), 'balanced');
+  assert.equal(getNextQualityMode('balanced'), 'thermal-safe');
+  assert.equal(getNextQualityMode('thermal-safe'), 'auto');
+  assert.equal(formatQualityModeLabel('auto'), 'Auto');
+  assert.equal(formatQualityModeLabel('thermal-safe'), 'Saver');
+});
+
+test('AdaptiveQualityController steps down under sustained slow frames, respects manual locks, and recovers with headroom', () => {
   const ctrl = new AdaptiveQualityController('HIGH');
   assert.equal(ctrl.getTier(), 'HIGH');
 
-  // Advance past initial 3s cooldown with steady 16ms frames
+  // Manual lock suppresses automatic tier transitions
+  ctrl.setLocked(true);
+  for (let i = 0; i < 400; i++) {
+    assert.equal(ctrl.recordFrame(0.04), null);
+  }
+  assert.equal(ctrl.getTier(), 'HIGH');
+
+  // Unlocking resets hysteresis and resumes 60fps monitoring
+  ctrl.setLocked(false);
+
+  // Advance past initial cooldown with steady 16ms frames
   for (let i = 0; i < 200; i++) {
     assert.equal(ctrl.recordFrame(0.016), null);
   }
@@ -101,4 +150,8 @@ test('AdaptiveQualityController steps down under sustained slow frames and recov
     }
   }
   assert.equal(recovery, 'BALANCED');
+
+  // Manual setTier jumps directly
+  ctrl.setTier('HIGH');
+  assert.equal(ctrl.getTier(), 'HIGH');
 });

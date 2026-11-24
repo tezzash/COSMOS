@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { type CosmicDriftState, computeCosmicDriftState } from '../cosmicDrift';
+import { type ShaderPrecision } from '../deviceProfile';
 import { type ParallaxInput, type ParallaxOptions, writeParallaxOffset } from '../parallax';
 
 const COSMIC_DRIFT_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   attribute float aDepth;
   attribute float aScale;
   attribute float aPhase;
@@ -96,6 +98,7 @@ export class CosmicDriftField {
 
   private readonly mat: THREE.ShaderMaterial;
   private readonly geometry: THREE.BufferGeometry;
+  private shaderPrecision: ShaderPrecision;
   private lastState: CosmicDriftState = {
     opacity: 0,
     scrollX: 0,
@@ -104,7 +107,8 @@ export class CosmicDriftField {
     warmth: 0.2,
   };
 
-  constructor(isMobile: boolean, pixelRatio: number) {
+  constructor(isMobile: boolean, pixelRatio: number, shaderPrecision: ShaderPrecision = 'highp') {
+    this.shaderPrecision = shaderPrecision;
     const count = isMobile ? 600 : 1100;
     this.starCount = count;
     const rand = seededRandom(11252026);
@@ -151,6 +155,7 @@ export class CosmicDriftField {
     this.mat = new THREE.ShaderMaterial({
       vertexShader: COSMIC_DRIFT_VERTEX_SHADER,
       fragmentShader: COSMIC_DRIFT_FRAGMENT_SHADER,
+      precision: shaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -185,7 +190,7 @@ export class CosmicDriftField {
 
     const damp = 1 - Math.exp(-4.5 * Math.min(delta, 0.1));
     const u = this.mat.uniforms;
-    if (u.uTime) u.uTime.value = elapsed;
+    if (u.uTime) u.uTime.value = elapsed % 628.3185;
     if (u.uOpacity) {
       u.uOpacity.value = THREE.MathUtils.lerp(u.uOpacity.value as number, state.opacity, damp);
     }
@@ -208,6 +213,19 @@ export class CosmicDriftField {
     if (u.uParallaxOffset) {
       (u.uParallaxOffset.value as THREE.Vector3).lerp(_driftParallaxTarget, damp);
     }
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    if (this.mat.uniforms.uPixelRatio) {
+      this.mat.uniforms.uPixelRatio.value = pixelRatio;
+    }
+  }
+
+  public setShaderPrecision(precision: ShaderPrecision): void {
+    if (this.shaderPrecision === precision) return;
+    this.shaderPrecision = precision;
+    this.mat.precision = precision;
+    this.mat.needsUpdate = true;
   }
 
   public getState(): CosmicDriftState {

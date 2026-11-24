@@ -20,6 +20,11 @@ import {
   getActiveTrait,
 } from './data/screenplay';
 import { CosmicEngine, isWebGLAvailable } from './engine/CosmicEngine';
+import {
+  type QualityMode,
+  type QualitySnapshot,
+  getNextQualityMode,
+} from './engine/deviceProfile';
 
 function getInitialQueryParams(): { autostart: boolean; startTime: number } {
   if (typeof window === 'undefined') return { autostart: false, startTime: 0 };
@@ -72,6 +77,8 @@ export default function App() {
   const [volume, setVolume] = useState<number>(0.72);
   const [captionsEnabled, setCaptionsEnabled] = useState<boolean>(true);
   const [controlsCollapsed, setControlsCollapsed] = useState<boolean>(false);
+  const [qualityMode, setQualityMode] = useState<QualityMode>('auto');
+  const [qualitySnapshot, setQualitySnapshot] = useState<QualitySnapshot | null>(null);
   const [captionSync, setCaptionSync] = useState<CaptionSyncSnapshot | null>(null);
   const captionUnsubRef = useRef<(() => void) | null>(null);
 
@@ -125,6 +132,9 @@ export default function App() {
     onSpatialAnchor: (rx: number, ry: number, rz: number) => {
       audioRef.current?.setSpatialAnchor(rx, ry, rz);
     },
+    onQualityChange: (snapshot: QualitySnapshot) => {
+      setQualitySnapshot(snapshot);
+    },
     getAudioBass: () => audioRef.current?.getBassEnergy() ?? 0,
     onContextLost: () => {
       setWebglSupported(false);
@@ -151,12 +161,14 @@ export default function App() {
           onNucleosynthesisBurst: (intensity) => callbacksRef.current.onNucleosynthesisBurst(intensity),
           onChapterTransition: () => callbacksRef.current.onChapterTransition(),
           onSpatialAnchor: (x, y, z) => callbacksRef.current.onSpatialAnchor(x, y, z),
+          onQualityChange: (snap) => callbacksRef.current.onQualityChange(snap),
           getAudioBass: () => callbacksRef.current.getAudioBass(),
           onContextLost: () => callbacksRef.current.onContextLost(),
         },
         {
           entered: initialQuery.autostart,
           timeSec: initialQuery.startTime,
+          qualityMode: 'auto',
         },
       );
       engineRef.current = engine;
@@ -313,6 +325,12 @@ export default function App() {
     }
   }, []);
 
+  const handleCycleQuality = useCallback(() => {
+    const next = getNextQualityMode(qualityMode);
+    setQualityMode(next);
+    engineRef.current?.setQualityMode(next);
+  }, [qualityMode]);
+
   // Global keyboard shortcuts for full non-mouse accessibility
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -338,6 +356,8 @@ export default function App() {
         setCaptionsEnabled((v) => !v);
       } else if (e.key === 'h' || e.key === 'H') {
         setControlsCollapsed((v) => !v);
+      } else if (e.key === 'q' || e.key === 'Q') {
+        handleCycleQuality();
       } else if (e.key === 'r' || e.key === 'R') {
         handleReplay();
       } else if (e.key === 'ArrowRight') {
@@ -353,6 +373,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     filmTime,
+    handleCycleQuality,
     handleEnter,
     handleReplay,
     handleSeek,
@@ -426,12 +447,15 @@ export default function App() {
           volume={volume}
           captionsEnabled={captionsEnabled}
           controlsCollapsed={controlsCollapsed}
+          qualityMode={qualityMode}
+          qualitySnapshot={qualitySnapshot}
           onTogglePlay={handleTogglePlay}
           onSeek={handleSeek}
           onReplay={handleReplay}
           onToggleMute={handleToggleMute}
           onVolumeChange={handleVolumeChange}
           onToggleCaptions={() => setCaptionsEnabled((v) => !v)}
+          onCycleQuality={handleCycleQuality}
           onToggleCollapsed={() => setControlsCollapsed((v) => !v)}
         />
       )}

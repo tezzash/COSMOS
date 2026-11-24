@@ -4,6 +4,7 @@ import {
   DEFAULT_COSMIC_YINYANG_CONFIG,
   generateCosmicYinYangEntities,
 } from '../cosmicYinYang';
+import { type ShaderPrecision } from '../deviceProfile';
 import { GALAXY_COLOR_PALETTES } from '../proceduralGalaxy';
 import { ProceduralGalaxyInstance } from './ProceduralGalaxySystem';
 
@@ -259,10 +260,16 @@ export class CosmicYinYangFormation {
 
   private lastPhaseLabel = 'dark-ignition';
 
-  constructor(isMobile: boolean, pixelRatio: number) {
+  constructor(
+    isMobile: boolean,
+    pixelRatio: number,
+    scaleFactorOverride?: number,
+    backdropShaderPrecision: ShaderPrecision = 'highp',
+  ) {
     this.root.position.set(0, 0, -340);
 
-    const scaleFactor = isMobile ? 0.56 : 1.0;
+    // Preserve visual parity on central Yin-Yang set piece (high-PPI mobile runs ~86% density at full highp)
+    const scaleFactor = scaleFactorOverride ?? (isMobile ? 0.72 : 1.0);
     const entities = generateCosmicYinYangEntities({
       ...DEFAULT_COSMIC_YINYANG_CONFIG,
       starCount: Math.round(DEFAULT_COSMIC_YINYANG_CONFIG.starCount * scaleFactor),
@@ -291,6 +298,7 @@ export class CosmicYinYangFormation {
     this.nebulaMat = new THREE.ShaderMaterial({
       vertexShader: YINYANG_NEBULA_VERTEX_SHADER,
       fragmentShader: YINYANG_NEBULA_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -324,6 +332,7 @@ export class CosmicYinYangFormation {
     this.starMat = new THREE.ShaderMaterial({
       vertexShader: YINYANG_STAR_VERTEX_SHADER,
       fragmentShader: YINYANG_STAR_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -435,6 +444,7 @@ export class CosmicYinYangFormation {
           pixelRatio,
           depthFactor: 0,
           spinSpeed: i % 2 === 0 ? 0.045 : -0.04,
+          shaderPrecision: backdropShaderPrecision,
         },
       );
       this.backdropGalaxies.push(gal);
@@ -504,6 +514,17 @@ export class CosmicYinYangFormation {
     }
     if (this.nebulaMat.uniforms.uPixelRatio) {
       this.nebulaMat.uniforms.uPixelRatio.value = pixelRatio;
+    }
+    for (const g of this.backdropGalaxies) {
+      g.setPixelRatio(pixelRatio);
+    }
+  }
+
+  public setBackdropShaderPrecision(precision: ShaderPrecision): void {
+    // Only non-critical distant backdrop galaxies switch to mediump;
+    // central Yin-Yang starMat & nebulaMat remain permanently highp.
+    for (const g of this.backdropGalaxies) {
+      g.setShaderPrecision(precision);
     }
   }
 

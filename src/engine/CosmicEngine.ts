@@ -20,6 +20,19 @@ import { CINEMA_OPTICS_SHADER, createLensDustTexture } from './cinemaPass';
 import { computeCinemaPresentation } from './cinemaPresentation';
 import { computeChapterLutWeights } from './colorGrading';
 import {
+  AdaptiveQualityController,
+  type DeviceProfile,
+  type QualityMode,
+  type QualitySnapshot,
+  type QualityTier,
+  type QualityTierSettings,
+  collectBrowserDeviceSignals,
+  detectDeviceProfile,
+  getQualitySettingsForTier,
+  qualityModeToTier,
+  resolveEffectiveDpr,
+} from './deviceProfile';
+import {
   computeInteractiveFieldInfluence,
   computeNarrationCosmicReactivity,
 } from './dynamicNebulaField';
@@ -59,6 +72,7 @@ export interface EngineCallbacks {
   onNucleosynthesisBurst?: (intensity: number) => void;
   onChapterTransition?: (chapterIndex: number) => void;
   onSpatialAnchor?: (relX: number, relY: number, relZ: number) => void;
+  onQualityChange?: (snapshot: QualitySnapshot) => void;
   getAudioBass?: () => number;
   onContextLost: () => void;
 }
@@ -103,6 +117,7 @@ export class CosmicEngine {
   private readonly callbacks: EngineCallbacks;
   private readonly isSoftwareGl: boolean;
   private readonly isMobile: boolean;
+  private deviceProfile: DeviceProfile;
 
   private readonly renderer: THREE.WebGLRenderer;
   private renderMode: RenderPipelineMode;
@@ -133,8 +148,13 @@ export class CosmicEngine {
   private readonly revealSeq: TitleReveal;
   private readonly nucleosynthesis: StellarNucleosynthesis;
 
-  private readonly pixelRatio: number;
+  private qualityMode: QualityMode;
+  private activeQualityTier: QualityTier;
+  private qualitySettings: QualityTierSettings;
+  private readonly adaptiveQuality: AdaptiveQualityController;
+  private pixelRatio: number;
   private resizeObserver: ResizeObserver | null = null;
+  private dprMediaQuery: MediaQueryList | null = null;
   private filmTime = 0;
   private elapsed = 0;
   private hasEntered = false;
@@ -163,18 +183,20 @@ export class CosmicEngine {
   constructor(
     container: HTMLElement,
     callbacks: EngineCallbacks,
-    initialState?: { entered: boolean; timeSec: number },
+    initialState?: { entered: boolean; timeSec: number; qualityMode?: QualityMode },
   ) {
     this.container = container;
     this.callbacks = callbacks;
-    this.isMobile =
-      window.innerWidth < 768 ||
-      (typeof navigator !== 'undefined' &&
-        /iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
-    this.prefersReducedMotion =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.qualityMode = initialState?.qualityMode ?? 'auto';
+    const signals = collectBrowserDeviceSignals();
+    this.deviceProfile = detectDeviceProfile(signals, this.qualityMode);
+    this.isMobile = this.deviceProfile.isMobile;
+    this.prefersReducedMotion = this.deviceProfile.prefersReducedMotion;
+    this.activeQualityTier = this.deviceProfile.initialTier;
+    this.adaptiveQuality = new AdaptiveQualityController(
+      this.activeQualityTier,
+      this.qualityMode !== 'auto',
+    );
     if (initialState) {
       this.hasEntered = initialState.entered;
       this.isPlaying = initialState.entered;
@@ -194,12 +216,20 @@ export class CosmicEngine {
     const gpuCaps = probeGpuRenderCapabilities(
       this.renderer,
       this.isMobile,
-      window.devicePixelRatio || 1,
+      this.deviceProfile.nativePixelRatio,
     );
     const plan = selectRenderPipelinePlan(gpuCaps);
     this.isSoftwareGl = gpuCaps.isSoftwareGl;
     this.renderMode = plan.mode;
-    this.pixelRatio = plan.pixelRatio;
+    this.qualitySettings = getQualitySettingsForTier(
+      this.activeQualityTier,
+      this.deviceProfile,
+      this.isSoftwareGl,
+    );
+    this.pixelRatio = resolveEffectiveDpr(
+      this.deviceProfile.nativePixelRatio,
+      this.qualitySettings,
+    );
 
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -249,17 +279,36 @@ export class CosmicEngine {
 
     const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
 
-    // Instantiate all continuous chapters in one shared cosmic world
-    this.cosmicEnv = new CosmicEnvironment(this.isMobile, this.pixelRatio, maxAnisotropy);
-    this.cosmicDrift = new CosmicDriftField(this.isMobile, this.pixelRatio);
+    const ambientPrecision = this.qualitySettings.ambientShaderPrecision;
+
+    // Instantiate all continuous chapters in one shared cosmic world:
+    // Non-critical ambient layers use the device-aware precision tier ('mediump' on mobile),
+    // while central hero set pieces (Yin-Yang, Earth, Geodesic Singularity, Constellations) stay 'highp'.
+    this.cosmicEnv = new CosmicEnvironment(
+      this.isMobile,
+      this.pixelRatio,
+      maxAnisotropy,
+      undefined,
+      ambientPrecision,
+    );
+    this.cosmicDrift = new CosmicDriftField(this.isMobile, this.pixelRatio, ambientPrecision);
     this.gpgpuFluid = new GpgpuCosmicFluid(this.isMobile, plan.useGpgpuFluid, this.pixelRatio);
+    this.gpgpuFluid.setEnabled(this.qualitySettings.gpgpuEnabled);
     this.earthSeq = new EarthSequence(maxAnisotropy);
     this.figureSeq = new ConstellationFigure();
     this.networkSeq = new ConstellationNetwork(this.isMobile);
-    this.yinYangSeq = new CosmicYinYangFormation(this.isMobile, this.pixelRatio);
+    this.yinYangSeq = new CosmicYinYangFormation(
+      this.isMobile,
+      this.pixelRatio,
+      this.qualitySettings.yinYangScaleFactor,
+      ambientPrecision,
+    );
     this.quietSeq = new QuietHoursSequence(maxAnisotropy);
     this.revealSeq = new TitleReveal(this.isMobile, this.pixelRatio);
     this.nucleosynthesis = new StellarNucleosynthesis(this.isMobile, this.pixelRatio);
+
+    this.cosmicEnv.setParticleDrawRatio(this.qualitySettings.particleDrawRatio);
+    this.yinYangSeq.setParticleDrawRatio(this.qualitySettings.yinYangDrawRatio);
 
     this.scene.add(
       this.cosmicEnv.root,
@@ -307,12 +356,15 @@ export class CosmicEngine {
         this.composer.addPass(new RenderPass(this.scene, this.camera));
 
         if (plan.useBloom) {
+          const bloomW = Math.max(1, Math.floor(width * this.qualitySettings.bloomResolutionScale));
+          const bloomH = Math.max(1, Math.floor(height * this.qualitySettings.bloomResolutionScale));
           this.bloomPass = new UnrealBloomPass(
-            new THREE.Vector2(width, height),
+            new THREE.Vector2(bloomW, bloomH),
             initialBloom.strength * 0.72,
             initialBloom.radius * 0.78,
             Math.max(0.72, initialBloom.threshold),
           );
+          this.bloomPass.enabled = this.qualitySettings.bloomEnabled;
           this.composer.addPass(this.bloomPass);
         }
 
@@ -352,6 +404,9 @@ export class CosmicEngine {
     _smoothCameraVel.set(0, 0, 0);
 
     this.bindEvents();
+    this.watchDisplayDensity();
+    this.syncQualityDataset();
+    this.callbacks.onQualityChange?.(this.getQualitySnapshot());
     this.lastPerfTime = performance.now();
     this.tick();
   }
@@ -440,19 +495,178 @@ export class CosmicEngine {
     this.handleResize();
   };
 
+  private handleDprChange = (): void => {
+    if (this.disposed) return;
+    this.watchDisplayDensity();
+    this.applyQualityTier(this.activeQualityTier, true);
+  };
+
+  private watchDisplayDensity(): void {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    if (this.dprMediaQuery) {
+      this.dprMediaQuery.removeEventListener('change', this.handleDprChange);
+      this.dprMediaQuery = null;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    try {
+      const mq = window.matchMedia(`(resolution: ${dpr}dppx)`);
+      mq.addEventListener('change', this.handleDprChange);
+      this.dprMediaQuery = mq;
+    } catch {
+      this.dprMediaQuery = null;
+    }
+  }
+
+  private syncQualityDataset(): void {
+    const canvas = this.renderer.domElement;
+    canvas.dataset.qualityMode = this.qualityMode;
+    canvas.dataset.qualityTier = this.activeQualityTier;
+    canvas.dataset.effectiveDpr = this.pixelRatio.toFixed(2);
+    canvas.dataset.nativeDpr = this.deviceProfile.nativePixelRatio.toFixed(2);
+    canvas.dataset.ambientPrecision = this.qualitySettings.ambientShaderPrecision;
+    canvas.dataset.heroPrecision = this.qualitySettings.heroShaderPrecision;
+  }
+
+  public getQualitySnapshot(): QualitySnapshot {
+    return {
+      mode: this.qualityMode,
+      activeTier: this.activeQualityTier,
+      effectiveDpr: this.pixelRatio,
+      nativeDpr: this.deviceProfile.nativePixelRatio,
+      ambientShaderPrecision: this.qualitySettings.ambientShaderPrecision,
+      heroShaderPrecision: this.qualitySettings.heroShaderPrecision,
+      isMobile: this.deviceProfile.isMobile,
+      isHighPpi: this.deviceProfile.isHighPpi,
+      averageFps: this.adaptiveQuality.getAverageFps(),
+    };
+  }
+
+  public setQualityMode(mode: QualityMode): void {
+    if (this.disposed) return;
+    this.qualityMode = mode;
+    if (mode === 'auto') {
+      const liveSignals = collectBrowserDeviceSignals();
+      this.deviceProfile = detectDeviceProfile(liveSignals, 'auto');
+      this.adaptiveQuality.setLocked(false);
+      this.adaptiveQuality.setTier(this.deviceProfile.initialTier);
+      this.applyQualityTier(this.deviceProfile.initialTier, true);
+    } else {
+      const targetTier = qualityModeToTier(mode);
+      this.adaptiveQuality.setTier(targetTier);
+      this.adaptiveQuality.setLocked(true);
+      this.applyQualityTier(targetTier, true);
+    }
+  }
+
+  private applyQualityTier(tier: QualityTier, force = false): void {
+    if (this.disposed) return;
+
+    const liveNativeDpr = clamp(
+      typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+      1,
+      4,
+    );
+    if (Math.abs(liveNativeDpr - this.deviceProfile.nativePixelRatio) > 0.01) {
+      this.deviceProfile = {
+        ...this.deviceProfile,
+        nativePixelRatio: liveNativeDpr,
+        isHighPpi: liveNativeDpr >= 2.25,
+      };
+    }
+
+    const nextSettings = getQualitySettingsForTier(tier, this.deviceProfile, this.isSoftwareGl);
+    const nextDpr = resolveEffectiveDpr(this.deviceProfile.nativePixelRatio, nextSettings);
+    const dprChanged = Math.abs(nextDpr - this.pixelRatio) > 0.005;
+    const tierChanged = tier !== this.activeQualityTier;
+
+    if (!force && !dprChanged && !tierChanged) return;
+
+    this.activeQualityTier = tier;
+    this.qualitySettings = nextSettings;
+    this.pixelRatio = nextDpr;
+
+    const w = Math.max(1, this.container.clientWidth || window.innerWidth);
+    const h = Math.max(1, this.container.clientHeight || window.innerHeight);
+
+    this.renderer.setPixelRatio(this.pixelRatio);
+    this.renderer.setSize(w, h, false);
+    if (this.composer) {
+      this.composer.setPixelRatio(this.pixelRatio);
+      this.composer.setSize(w, h);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.enabled = nextSettings.bloomEnabled;
+      this.bloomPass.resolution.set(
+        Math.max(1, Math.floor(w * nextSettings.bloomResolutionScale)),
+        Math.max(1, Math.floor(h * nextSettings.bloomResolutionScale)),
+      );
+    }
+
+    // Propagate updated DPR & particle budgets seamlessly without recreating WebGL resources
+    this.cosmicEnv.setPixelRatio(this.pixelRatio);
+    this.cosmicDrift.setPixelRatio(this.pixelRatio);
+    this.gpgpuFluid.setPixelRatio(this.pixelRatio);
+    this.yinYangSeq.setPixelRatio(this.pixelRatio);
+    this.revealSeq.setPixelRatio(this.pixelRatio);
+    this.nucleosynthesis.setPixelRatio(this.pixelRatio);
+
+    this.cosmicEnv.setParticleDrawRatio(nextSettings.particleDrawRatio);
+    this.yinYangSeq.setParticleDrawRatio(nextSettings.yinYangDrawRatio);
+    this.gpgpuFluid.setEnabled(nextSettings.gpgpuEnabled);
+
+    // Switch non-critical ambient shaders to mediump/highp while keeping hero set pieces permanently highp
+    this.cosmicEnv.setAmbientShaderPrecision(nextSettings.ambientShaderPrecision);
+    this.cosmicDrift.setShaderPrecision(nextSettings.ambientShaderPrecision);
+    this.yinYangSeq.setBackdropShaderPrecision(nextSettings.ambientShaderPrecision);
+
+    this.needsFirstFramePresent = true;
+    this.syncQualityDataset();
+    this.callbacks.onQualityChange?.(this.getQualitySnapshot());
+  }
+
   private handleResize = (): void => {
     if (this.disposed) return;
     const w = Math.max(1, this.container.clientWidth || window.innerWidth);
     const h = Math.max(1, this.container.clientHeight || window.innerHeight);
     const aspect = w / Math.max(1, h);
+
+    // Re-evaluate DPR if window moved across screens or orientation changed
+    const liveNativeDpr = clamp(window.devicePixelRatio || 1, 1, 4);
+    if (Math.abs(liveNativeDpr - this.deviceProfile.nativePixelRatio) > 0.01) {
+      this.deviceProfile = {
+        ...this.deviceProfile,
+        nativePixelRatio: liveNativeDpr,
+        isHighPpi: liveNativeDpr >= 2.25,
+      };
+      this.qualitySettings = getQualitySettingsForTier(
+        this.activeQualityTier,
+        this.deviceProfile,
+        this.isSoftwareGl,
+      );
+      this.pixelRatio = resolveEffectiveDpr(liveNativeDpr, this.qualitySettings);
+      this.renderer.setPixelRatio(this.pixelRatio);
+      this.composer?.setPixelRatio(this.pixelRatio);
+      this.cosmicEnv.setPixelRatio(this.pixelRatio);
+      this.cosmicDrift.setPixelRatio(this.pixelRatio);
+      this.gpgpuFluid.setPixelRatio(this.pixelRatio);
+      this.yinYangSeq.setPixelRatio(this.pixelRatio);
+      this.revealSeq.setPixelRatio(this.pixelRatio);
+      this.nucleosynthesis.setPixelRatio(this.pixelRatio);
+      this.syncQualityDataset();
+      this.callbacks.onQualityChange?.(this.getQualitySnapshot());
+    }
+
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(w, h);
+    this.renderer.setSize(w, h, false);
     if (this.composer) {
       this.composer.setSize(w, h);
     }
     if (this.bloomPass) {
-      this.bloomPass.resolution.set(w, h);
+      this.bloomPass.resolution.set(
+        Math.max(1, Math.floor(w * this.qualitySettings.bloomResolutionScale)),
+        Math.max(1, Math.floor(h * this.qualitySettings.bloomResolutionScale)),
+      );
     }
     if (this.gravitationalLensPass) {
       this.gravitationalLensPass.setAspect(aspect);
@@ -708,6 +922,7 @@ export class CosmicEngine {
     this.lastHudSync = now;
     const canvas = this.renderer.domElement;
     canvas.dataset.renderMode = this.renderMode;
+    this.syncQualityDataset();
     canvas.dataset.bloomStrength = this.bloomPass ? this.bloomPass.strength.toFixed(2) : '0.00';
     canvas.dataset.bloomThreshold = this.bloomPass ? this.bloomPass.threshold.toFixed(2) : '1.00';
     canvas.dataset.lutGrade = this.lutPass ? this.lastLutLabel : 'direct';
@@ -783,6 +998,14 @@ export class CosmicEngine {
     this.elapsed += delta * motionScale;
 
     if (this.hasEntered && this.isPlaying) {
+      // Adaptive 60fps DPR & shader-budget controller in Auto mode (hysteresis-protected)
+      if (this.qualityMode === 'auto' && !this.isSoftwareGl) {
+        const nextTier = this.adaptiveQuality.recordFrame(rawDelta);
+        if (nextTier) {
+          this.applyQualityTier(nextTier);
+        }
+      }
+
       this.filmTime = Math.min(FILM_DURATION, this.filmTime + delta);
       if (this.filmTime >= FILM_DURATION && !this.completedFired) {
         this.completedFired = true;
@@ -1067,6 +1290,10 @@ export class CosmicEngine {
 
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    if (this.dprMediaQuery) {
+      this.dprMediaQuery.removeEventListener('change', this.handleDprChange);
+      this.dprMediaQuery = null;
+    }
     window.removeEventListener('resize', this.handleResize);
     this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);

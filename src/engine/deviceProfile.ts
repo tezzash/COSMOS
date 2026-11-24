@@ -2,6 +2,9 @@ import { clamp } from '@/data/chapters';
 import type { EnvQualityOverride } from '@/utils/env';
 
 export type QualityTier = 'HIGH' | 'BALANCED' | 'THERMAL-SAFE';
+export type QualityMode = 'auto' | 'high' | 'balanced' | 'thermal-safe';
+export type ShaderPrecision = 'highp' | 'mediump';
+export type EffectPrecisionRole = 'hero' | 'ambient';
 
 export interface DeviceSignals {
   userAgent: string;
@@ -25,6 +28,7 @@ export interface DeviceProfile {
   isIOS: boolean;
   isIOSSafari: boolean;
   isIPhoneProMaxClass: boolean;
+  isHighPpi: boolean;
   isStandaloneWebApp: boolean;
   prefersReducedMotion: boolean;
   nativePixelRatio: number;
@@ -39,15 +43,59 @@ export interface QualityTierSettings {
   bloomEnabled: boolean;
   bloomResolutionScale: number;
   particleDrawRatio: number;
+  /** Preserves visual parity on hero set pieces (e.g. Chapter IV Yin-Yang) even on mobile */
+  yinYangScaleFactor: number;
+  yinYangDrawRatio: number;
+  /** Non-critical ambient cosmic shaders drop to mediump on mobile/balanced to save GPU bandwidth */
+  ambientShaderPrecision: ShaderPrecision;
+  /** Central hero set pieces (Yin-Yang, Earth, Singularity) always render at full highp precision */
+  heroShaderPrecision: 'highp';
   gpgpuEnabled: boolean;
   cinemaGrainEnabled: boolean;
   targetFrameMs: number;
 }
 
+export interface QualitySnapshot {
+  mode: QualityMode;
+  activeTier: QualityTier;
+  effectiveDpr: number;
+  nativeDpr: number;
+  ambientShaderPrecision: ShaderPrecision;
+  heroShaderPrecision: 'highp';
+  isMobile: boolean;
+  isHighPpi: boolean;
+  averageFps: number;
+}
+
 const TIER_ORDER: readonly QualityTier[] = ['HIGH', 'BALANCED', 'THERMAL-SAFE'];
+const QUALITY_MODE_ORDER: readonly QualityMode[] = ['auto', 'high', 'balanced', 'thermal-safe'];
+
+export function qualityModeToTier(mode: Exclude<QualityMode, 'auto'>): QualityTier {
+  if (mode === 'high') return 'HIGH';
+  if (mode === 'balanced') return 'BALANCED';
+  return 'THERMAL-SAFE';
+}
+
+export function getNextQualityMode(current: QualityMode): QualityMode {
+  const idx = QUALITY_MODE_ORDER.indexOf(current);
+  return QUALITY_MODE_ORDER[(idx + 1) % QUALITY_MODE_ORDER.length] ?? 'auto';
+}
+
+export function formatQualityModeLabel(mode: QualityMode): string {
+  if (mode === 'auto') return 'Auto';
+  if (mode === 'high') return 'High';
+  if (mode === 'balanced') return 'Balanced';
+  return 'Saver';
+}
+
+export function formatQualityTierLabel(tier: QualityTier): string {
+  if (tier === 'HIGH') return 'High';
+  if (tier === 'BALANCED') return 'Balanced';
+  return 'Saver';
+}
 
 /**
- * Reliable multi-signal mobile, iOS Safari, and iPhone 17 Pro Max detection.
+ * Reliable multi-signal mobile, iOS Safari, high-PPI display, and iPhone Pro Max detection.
  * Never depends solely on window.innerWidth so landscape phones and iPadOS desktop-mode
  * are classified accurately.
  */
@@ -76,6 +124,7 @@ export function detectDeviceProfile(
   const touchPhoneHeuristic =
     signals.coarsePointer && !signals.anyHover && signals.maxTouchPoints >= 1 && shortSide <= 540;
   const isMobile = isIPhoneUA || isAndroidMobile || touchPhoneHeuristic;
+  const isHighPpi = dpr >= 2.25;
 
   // iPhone 16/17 Pro Max 6.9-inch class: ~440x956 logical pt at 3x DPR (2868x1320 native px)
   const physicalLong = Math.round(longSide * dpr);
@@ -99,7 +148,7 @@ export function detectDeviceProfile(
     const lowCores =
       typeof signals.hardwareConcurrency === 'number' && signals.hardwareConcurrency > 0 && signals.hardwareConcurrency <= 4;
     if (isIPhoneProMaxClass) {
-      // Apple A19 Pro handles HIGH cleanly when DPR is capped intelligently below 3x native
+      // Flagship Apple Silicon handles HIGH cleanly with 2.0x DPR cap + mediump ambient shader tier
       initialTier = 'HIGH';
     } else if (isMobile && (lowMemory || lowCores)) {
       initialTier = 'THERMAL-SAFE';
@@ -113,11 +162,12 @@ export function detectDeviceProfile(
     isIOS,
     isIOSSafari,
     isIPhoneProMaxClass,
+    isHighPpi,
     isStandaloneWebApp: Boolean(signals.standalone),
     prefersReducedMotion: signals.prefersReducedMotion,
     nativePixelRatio: dpr,
     // Lock mobile / iOS ProMotion to a serene 60 FPS ceiling to eliminate thermal throttling
-    targetFps: isMobile || isIOS ? 60 : 60,
+    targetFps: 60,
     initialTier,
   };
 }
@@ -134,6 +184,10 @@ export function getQualitySettingsForTier(
       bloomEnabled: false,
       bloomResolutionScale: 0.5,
       particleDrawRatio: 1.0,
+      yinYangScaleFactor: 0.85,
+      yinYangDrawRatio: 1.0,
+      ambientShaderPrecision: 'mediump',
+      heroShaderPrecision: 'highp',
       gpgpuEnabled: false,
       cinemaGrainEnabled: false,
       targetFrameMs: 16.67,
@@ -141,15 +195,25 @@ export function getQualitySettingsForTier(
   }
 
   if (profile.isMobile || profile.isIOS) {
-    // Intelligent DPR caps for 2868x1320 (3x) ProMotion OLED:
-    // 2.0x on HIGH delivers ~1912x880 razor-sharp HDR with less than half the fragment fill of 3x!
+    // High-PPI mobile screens (e.g. 3x OLED) get up to 2.0x crisp DPR in HIGH while offloading
+    // non-critical background/ambient shaders to mediump, freeing GPU budget to keep central
+    // hero set pieces (Yin-Yang, Earth, Singularity) at full highp parity and high particle density.
+    const yinYangScaleFactor = profile.isIPhoneProMaxClass || profile.isHighPpi ? 0.86 : 0.72;
+
     if (tier === 'HIGH') {
       return {
         tier,
-        maxDpr: Math.min(profile.nativePixelRatio, profile.isIPhoneProMaxClass ? 2.0 : 1.75),
+        maxDpr: Math.min(
+          profile.nativePixelRatio,
+          profile.isIPhoneProMaxClass || profile.isHighPpi ? 2.0 : 1.75,
+        ),
         bloomEnabled: true,
         bloomResolutionScale: 0.5,
         particleDrawRatio: 1.0,
+        yinYangScaleFactor,
+        yinYangDrawRatio: 1.0,
+        ambientShaderPrecision: 'mediump',
+        heroShaderPrecision: 'highp',
         gpgpuEnabled: true,
         cinemaGrainEnabled: true,
         targetFrameMs: 16.67,
@@ -158,10 +222,14 @@ export function getQualitySettingsForTier(
     if (tier === 'BALANCED') {
       return {
         tier,
-        maxDpr: Math.min(profile.nativePixelRatio, 1.55),
+        maxDpr: Math.min(profile.nativePixelRatio, profile.isHighPpi ? 1.65 : 1.5),
         bloomEnabled: true,
         bloomResolutionScale: 0.4,
         particleDrawRatio: 0.78,
+        yinYangScaleFactor,
+        yinYangDrawRatio: 0.9,
+        ambientShaderPrecision: 'mediump',
+        heroShaderPrecision: 'highp',
         gpgpuEnabled: true,
         cinemaGrainEnabled: true,
         targetFrameMs: 16.67,
@@ -173,6 +241,10 @@ export function getQualitySettingsForTier(
       bloomEnabled: false,
       bloomResolutionScale: 0.35,
       particleDrawRatio: 0.58,
+      yinYangScaleFactor,
+      yinYangDrawRatio: 0.76,
+      ambientShaderPrecision: 'mediump',
+      heroShaderPrecision: 'highp',
       gpgpuEnabled: false,
       cinemaGrainEnabled: false,
       targetFrameMs: 16.67,
@@ -187,6 +259,10 @@ export function getQualitySettingsForTier(
       bloomEnabled: true,
       bloomResolutionScale: 0.75,
       particleDrawRatio: 1.0,
+      yinYangScaleFactor: 1.0,
+      yinYangDrawRatio: 1.0,
+      ambientShaderPrecision: 'highp',
+      heroShaderPrecision: 'highp',
       gpgpuEnabled: true,
       cinemaGrainEnabled: true,
       targetFrameMs: 16.67,
@@ -199,6 +275,10 @@ export function getQualitySettingsForTier(
       bloomEnabled: true,
       bloomResolutionScale: 0.5,
       particleDrawRatio: 0.8,
+      yinYangScaleFactor: 1.0,
+      yinYangDrawRatio: 0.92,
+      ambientShaderPrecision: 'mediump',
+      heroShaderPrecision: 'highp',
       gpgpuEnabled: true,
       cinemaGrainEnabled: true,
       targetFrameMs: 16.67,
@@ -210,10 +290,42 @@ export function getQualitySettingsForTier(
     bloomEnabled: false,
     bloomResolutionScale: 0.4,
     particleDrawRatio: 0.6,
+    yinYangScaleFactor: 1.0,
+    yinYangDrawRatio: 0.8,
+    ambientShaderPrecision: 'mediump',
+    heroShaderPrecision: 'highp',
     gpgpuEnabled: false,
     cinemaGrainEnabled: false,
     targetFrameMs: 16.67,
   };
+}
+
+/**
+ * Resolves the GLSL float precision tier for a given cosmic effect role.
+ * Hero set pieces (Yin-Yang, Earth, Geodesic Singularity, Constellations) always stay 'highp'
+ * so mobile GPU savings never degrade central visual parity.
+ */
+export function getShaderPrecisionForEffect(
+  role: EffectPrecisionRole,
+  profile: DeviceProfile,
+  tier: QualityTier,
+  isSoftwareGl = false,
+): ShaderPrecision {
+  if (role === 'hero') return 'highp';
+  return getQualitySettingsForTier(tier, profile, isSoftwareGl).ambientShaderPrecision;
+}
+
+/**
+ * Computes the effective WebGL canvas pixel ratio bounded cleanly to [1, settings.maxDpr]
+ * based on live display density (DPR).
+ */
+export function resolveEffectiveDpr(
+  nativeDpr: number,
+  settings: Pick<QualityTierSettings, 'maxDpr'>,
+): number {
+  const safeNative = Number.isFinite(nativeDpr) && nativeDpr > 0 ? nativeDpr : 1;
+  const bounded = clamp(Math.min(safeNative, settings.maxDpr), 1, 2);
+  return Math.round(bounded * 100) / 100;
 }
 
 /**
@@ -266,7 +378,7 @@ export function collectBrowserDeviceSignals(): DeviceSignals {
 
 /**
  * Hysteresis-protected adaptive quality manager monitoring rolling frame times
- * so iPhone 17 Pro Max & mobile Safari sustain smooth 60 FPS without oscillating
+ * so high-PPI phones & mobile Safari sustain smooth 60 FPS without oscillating
  * between tiers or overheating.
  */
 export class AdaptiveQualityController {
@@ -275,7 +387,7 @@ export class AdaptiveQualityController {
   private slowDurationSec = 0;
   private fastDurationSec = 0;
   private cooldownSec = 3.0;
-  private readonly locked: boolean;
+  private locked: boolean;
 
   constructor(initialTier: QualityTier, locked = false) {
     this.tierIndex = Math.max(0, TIER_ORDER.indexOf(initialTier));
@@ -286,8 +398,28 @@ export class AdaptiveQualityController {
     return TIER_ORDER[this.tierIndex] ?? 'BALANCED';
   }
 
+  public setTier(tier: QualityTier): void {
+    this.tierIndex = Math.max(0, TIER_ORDER.indexOf(tier));
+    this.reset();
+  }
+
+  public isLocked(): boolean {
+    return this.locked;
+  }
+
+  public setLocked(locked: boolean): void {
+    this.locked = locked;
+    if (!locked) {
+      this.reset();
+    }
+  }
+
   public getAverageFrameMs(): number {
     return this.emaFrameMs;
+  }
+
+  public getAverageFps(): number {
+    return Math.round(1000 / Math.max(8, this.emaFrameMs));
   }
 
   public reset(): void {

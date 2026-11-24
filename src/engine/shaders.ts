@@ -33,6 +33,7 @@ const GLSL_CURL_NOISE = /* glsl */ `
 `;
 
 export const STARFIELD_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   attribute float aScale;
   attribute float aPhase;
   attribute vec3 aColor;
@@ -114,6 +115,7 @@ export const STARFIELD_FRAGMENT_SHADER = /* glsl */ `
  * shallow-focus optical bokeh discs catching warm rim light.
  */
 export const NEAR_DEBRIS_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   attribute float aScale;
   attribute float aPhase;
   attribute vec3 aColor;
@@ -273,6 +275,7 @@ export function createNebulaCloudTexture(
 }
 
 export const NEBULA_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   varying vec2 vUv;
   void main() {
     vUv = uv;
@@ -316,6 +319,7 @@ export const NEBULA_FRAGMENT_SHADER = /* glsl */ `
  * Crepuscular volumetric god-rays billboard shader for the Sun & Guiding Star.
  */
 export const GOD_RAYS_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   varying vec2 vUv;
   void main() {
     vUv = uv;
@@ -600,6 +604,7 @@ export const EARTH_SURFACE_FRAGMENT_SHADER = /* glsl */ `
  * and razor-sharp pinpoint deep-field stars with restrained theatrical brightness.
  */
 export const MILKY_WAY_SKY_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   varying vec2 vUv;
   void main() {
     vUv = uv;

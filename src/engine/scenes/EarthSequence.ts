@@ -615,9 +615,7 @@ export class EarthSequence {
         this.birthStarTrailPositions[i * 3 + 2] = THREE.MathUtils.lerp(7.6, -26.0, sp * sp);
       }
       if (this.birthStarTrail.geometry.attributes.position) {
-        if (this.birthStarTrail.geometry.attributes.position) {
         this.birthStarTrail.geometry.attributes.position.needsUpdate = true;
-      }
       }
     }
   }

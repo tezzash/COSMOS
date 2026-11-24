@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import milkyWay4k from '@/assets/textures/milky_way_4k.jpg';
 import { SILENCE_END, SILENCE_START, clamp, smoothstep } from '@/data/chapters';
+import { type ShaderPrecision } from '@/engine/deviceProfile';
 import { buildHyderabadHipparcosStarfield } from '@/engine/hipparcos';
 import { type ParallaxInput, type ParallaxOptions, writeParallaxOffset } from '@/engine/parallax';
 import {
@@ -87,6 +88,7 @@ export class CosmicEnvironment {
 
   private milkyWayTexture: THREE.Texture | null = null;
   private milkyWayLoaded = false;
+  private ambientPrecision: ShaderPrecision;
   private disposed = false;
 
   constructor(
@@ -94,7 +96,9 @@ export class CosmicEnvironment {
     pixelRatio: number,
     maxAnisotropy = 4,
     onAssetSettled?: (loaded: boolean) => void,
+    ambientShaderPrecision: ShaderPrecision = 'highp',
   ) {
+    this.ambientPrecision = ambientShaderPrecision;
     const rand = seededRandom(20021125);
     const scaleFactor = isMobile ? 0.55 : 1.0;
 
@@ -107,6 +111,7 @@ export class CosmicEnvironment {
     this.milkyWayMat = new THREE.ShaderMaterial({
       vertexShader: MILKY_WAY_SKY_VERTEX_SHADER,
       fragmentShader: MILKY_WAY_SKY_FRAGMENT_SHADER,
+      precision: ambientShaderPrecision,
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
@@ -167,6 +172,7 @@ export class CosmicEnvironment {
     this.hipparcosMat = new THREE.ShaderMaterial({
       vertexShader: STARFIELD_VERTEX_SHADER,
       fragmentShader: STARFIELD_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -240,6 +246,7 @@ export class CosmicEnvironment {
       const mat = new THREE.ShaderMaterial({
         vertexShader: STARFIELD_VERTEX_SHADER,
         fragmentShader: STARFIELD_FRAGMENT_SHADER,
+        precision: ambientShaderPrecision,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -301,6 +308,7 @@ export class CosmicEnvironment {
     this.nearDebrisMat = new THREE.ShaderMaterial({
       vertexShader: NEAR_DEBRIS_VERTEX_SHADER,
       fragmentShader: NEAR_DEBRIS_FRAGMENT_SHADER,
+      precision: ambientShaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -348,6 +356,7 @@ export class CosmicEnvironment {
       const mat = new THREE.ShaderMaterial({
         vertexShader: NEBULA_VERTEX_SHADER,
         fragmentShader: NEBULA_FRAGMENT_SHADER,
+        precision: ambientShaderPrecision,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -374,12 +383,12 @@ export class CosmicEnvironment {
 
     // 2b. Dynamic real-time procedural FBM nebulae & curl-advected particle field
     //     reacting to narration intensity and subtle user pointer interaction
-    this.dynamicNebulae = new DynamicNebulaParticles(isMobile, pixelRatio);
+    this.dynamicNebulae = new DynamicNebulaParticles(isMobile, pixelRatio, ambientShaderPrecision);
     this.root.add(this.dynamicNebulae.root);
     this.disposables.push(this.dynamicNebulae);
 
     // 3. Procedural Galaxy System (5 distinct cohesive corridor galaxies + interactive Hero Galaxy)
-    this.galaxySystem = new ProceduralGalaxySystem(isMobile, pixelRatio);
+    this.galaxySystem = new ProceduralGalaxySystem(isMobile, pixelRatio, ambientShaderPrecision);
     this.root.add(this.galaxySystem.root);
     this.disposables.push(this.galaxySystem);
 
@@ -427,6 +436,7 @@ export class CosmicEnvironment {
     this.bigBangMat = new THREE.ShaderMaterial({
       vertexShader: BIG_BANG_VERTEX_SHADER,
       fragmentShader: BIG_BANG_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -441,11 +451,12 @@ export class CosmicEnvironment {
     bbPoints.frustumCulled = false;
     this.bigBangGroup.add(bbPoints);
 
-    // True Geodesic Raymarched Schwarzschild/Kerr Singularity & Volumetric Accretion Disk
+    // True Geodesic Raymarched Schwarzschild/Kerr Singularity & Volumetric Accretion Disk (Hero: always highp)
     const geodesicGeo = new THREE.SphereGeometry(18.0, 42, 30);
     this.singularityGeodesicMat = new THREE.ShaderMaterial({
       vertexShader: GEODESIC_SINGULARITY_VERTEX_SHADER,
       fragmentShader: GEODESIC_SINGULARITY_FRAGMENT_SHADER,
+      precision: 'highp',
       transparent: true,
       depthWrite: false,
       side: THREE.BackSide,
@@ -519,6 +530,7 @@ export class CosmicEnvironment {
     this.guidingRaysMat = new THREE.ShaderMaterial({
       vertexShader: GOD_RAYS_VERTEX_SHADER,
       fragmentShader: GOD_RAYS_FRAGMENT_SHADER,
+      precision: ambientShaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -859,6 +871,39 @@ export class CosmicEnvironment {
       this.bigBangMat.uniforms.uPixelRatio.value = pixelRatio;
     }
     this.dynamicNebulae.setPixelRatio(pixelRatio);
+    this.galaxySystem.setPixelRatio(pixelRatio);
+  }
+
+  public setAmbientShaderPrecision(precision: ShaderPrecision): void {
+    if (this.ambientPrecision === precision) return;
+    this.ambientPrecision = precision;
+
+    // Non-critical ambient cosmic layers switch cleanly to mediump on mobile/balanced;
+    // hero Singularity, Hipparcos Vault, and Big Bang stay permanently highp.
+    this.milkyWayMat.precision = precision;
+    this.milkyWayMat.needsUpdate = true;
+
+    this.nearDebrisMat.precision = precision;
+    this.nearDebrisMat.needsUpdate = true;
+
+    this.guidingRaysMat.precision = precision;
+    this.guidingRaysMat.needsUpdate = true;
+
+    for (let i = 0; i < this.starfieldLayers.length; i++) {
+      const layer = this.starfieldLayers[i];
+      if (!layer) continue;
+      layer.mat.precision = precision;
+      layer.mat.needsUpdate = true;
+    }
+    for (let i = 0; i < this.nebulaMaterials.length; i++) {
+      const mat = this.nebulaMaterials[i];
+      if (!mat) continue;
+      mat.precision = precision;
+      mat.needsUpdate = true;
+    }
+
+    this.dynamicNebulae.setShaderPrecision(precision);
+    this.galaxySystem.setShaderPrecision(precision);
   }
 
   public setParticleDrawRatio(ratio: number): void {

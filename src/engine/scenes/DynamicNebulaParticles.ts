@@ -6,6 +6,7 @@ import {
   generateProceduralNebulaLayers,
   generateProceduralParticleFieldData,
 } from '../dynamicNebulaField';
+import { type ShaderPrecision } from '../deviceProfile';
 import { type ParallaxInput, type ParallaxOptions, writeParallaxOffset } from '../parallax';
 
 const _parallaxVec = new THREE.Vector3();
@@ -19,6 +20,7 @@ const _targetAccent = new THREE.Color();
  * narration-driven intensity/turbulence, and subtle pointer-proximity light scattering.
  */
 const DYNAMIC_NEBULA_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   varying vec2 vUv;
   varying vec2 vScreenNdc;
 
@@ -52,10 +54,11 @@ const DYNAMIC_NEBULA_FRAGMENT_SHADER = /* glsl */ `
   varying vec2 vUv;
   varying vec2 vScreenNdc;
 
+  // mediump-safe Dave Hoskins hash: keeps intermediate products bounded to prevent float16 banding
   float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
   }
 
   float valueNoise(vec2 p) {
@@ -142,6 +145,7 @@ const DYNAMIC_NEBULA_FRAGMENT_SHADER = /* glsl */ `
  * and subtle screen-space pointer eddy flow & chromatic iridescence.
  */
 const DYNAMIC_PARTICLE_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   attribute float aScale;
   attribute float aPhase;
   attribute float aBand;
@@ -301,8 +305,10 @@ export class DynamicNebulaParticles {
   private curLumBoost = 0;
   private curPulseEnergy = 0;
   private lastMode = 'expansion';
+  private shaderPrecision: ShaderPrecision;
 
-  constructor(isMobile: boolean, pixelRatio: number) {
+  constructor(isMobile: boolean, pixelRatio: number, shaderPrecision: ShaderPrecision = 'highp') {
+    this.shaderPrecision = shaderPrecision;
     const layerSpecs = generateProceduralNebulaLayers(25112002, isMobile ? 6 : 8);
     this.nebulaCount = layerSpecs.length;
 
@@ -315,6 +321,7 @@ export class DynamicNebulaParticles {
       const mat = new THREE.ShaderMaterial({
         vertexShader: DYNAMIC_NEBULA_VERTEX_SHADER,
         fragmentShader: DYNAMIC_NEBULA_FRAGMENT_SHADER,
+        precision: shaderPrecision,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -371,6 +378,7 @@ export class DynamicNebulaParticles {
     this.particleMat = new THREE.ShaderMaterial({
       vertexShader: DYNAMIC_PARTICLE_VERTEX_SHADER,
       fragmentShader: DYNAMIC_PARTICLE_FRAGMENT_SHADER,
+      precision: shaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -452,12 +460,13 @@ export class DynamicNebulaParticles {
     );
 
     const safeVis = clamp(visibility, 0, 1);
+    const wrappedTime = elapsed % 600;
 
     for (let i = 0; i < this.nebulae.length; i++) {
       const entry = this.nebulae[i];
       if (!entry) continue;
       const u = entry.mat.uniforms;
-      if (u.uTime) u.uTime.value = elapsed;
+      if (u.uTime) u.uTime.value = wrappedTime;
       if (u.uOpacity) u.uOpacity.value = entry.baseOpacity * safeVis * this.curIntensity;
       if (u.uTurbulence) u.uTurbulence.value = this.curTurbulence;
       if (u.uDensity) u.uDensity.value = this.curDensity;
@@ -473,7 +482,7 @@ export class DynamicNebulaParticles {
     }
 
     const pu = this.particleMat.uniforms;
-    if (pu.uTime) pu.uTime.value = elapsed;
+    if (pu.uTime) pu.uTime.value = wrappedTime;
     if (pu.uOpacity) pu.uOpacity.value = safeVis * clamp(this.curIntensity * 0.68, 0.03, 0.92);
     if (pu.uTurbulence) pu.uTurbulence.value = this.curTurbulence;
     if (pu.uFlowSpeed) pu.uFlowSpeed.value = this.curFlowSpeed;
@@ -514,6 +523,19 @@ export class DynamicNebulaParticles {
   public setParticleDrawRatio(ratio: number): void {
     const r = clamp(ratio, 0.35, 1.0);
     this.particleGeo.setDrawRange(0, Math.floor(this.particleCount * r));
+  }
+
+  public setShaderPrecision(precision: ShaderPrecision): void {
+    if (this.shaderPrecision === precision) return;
+    this.shaderPrecision = precision;
+    for (let i = 0; i < this.nebulae.length; i++) {
+      const entry = this.nebulae[i];
+      if (!entry) continue;
+      entry.mat.precision = precision;
+      entry.mat.needsUpdate = true;
+    }
+    this.particleMat.precision = precision;
+    this.particleMat.needsUpdate = true;
   }
 
   public getDiagnostics(): {

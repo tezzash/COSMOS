@@ -4,6 +4,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  SlidersHorizontal,
   Subtitles,
   Volume2,
   VolumeX,
@@ -14,6 +15,12 @@ import {
   FILM_DURATION,
   formatTimecode,
 } from '../data/chapters';
+import {
+  type QualityMode,
+  type QualitySnapshot,
+  formatQualityModeLabel,
+  formatQualityTierLabel,
+} from '../engine/deviceProfile';
 
 interface CinemaControlsProps {
   filmTime: number;
@@ -23,12 +30,15 @@ interface CinemaControlsProps {
   volume: number;
   captionsEnabled: boolean;
   controlsCollapsed: boolean;
+  qualityMode: QualityMode;
+  qualitySnapshot: QualitySnapshot | null;
   onTogglePlay: () => void;
   onSeek: (timeSec: number) => void;
   onReplay: () => void;
   onToggleMute: () => void;
   onVolumeChange: (vol: number) => void;
   onToggleCaptions: () => void;
+  onCycleQuality: () => void;
   onToggleCollapsed: () => void;
 }
 
@@ -40,14 +50,26 @@ export function CinemaControls({
   volume,
   captionsEnabled,
   controlsCollapsed,
+  qualityMode,
+  qualitySnapshot,
   onTogglePlay,
   onSeek,
   onReplay,
   onToggleMute,
   onVolumeChange,
   onToggleCaptions,
+  onCycleQuality,
   onToggleCollapsed,
 }: CinemaControlsProps) {
+  const modeLabel = formatQualityModeLabel(qualityMode);
+  const resolvedTierLabel = qualitySnapshot
+    ? formatQualityTierLabel(qualitySnapshot.activeTier)
+    : null;
+  const qualityButtonLabel =
+    qualityMode === 'auto' && resolvedTierLabel ? `Auto · ${resolvedTierLabel}` : modeLabel;
+  const qualityDescription = qualitySnapshot
+    ? `Rendering quality: ${modeLabel} (${resolvedTierLabel}, ${qualitySnapshot.effectiveDpr.toFixed(2)}x resolution). Click to switch.`
+    : `Rendering quality: ${modeLabel}. Click to switch.`;
   return (
     <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[min(860px,94vw)] flex flex-col items-center">
       <button
@@ -173,8 +195,26 @@ export function CinemaControls({
               })}
             </div>
 
-            {/* Captions toggle */}
-            <div className="flex items-center gap-1 shrink-0">
+            {/* Rendering Quality & Captions toggles */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={onCycleQuality}
+                title={qualityDescription}
+                aria-label={qualityDescription}
+                data-testid="quality-toggle"
+                data-quality-mode={qualityMode}
+                className={`inline-flex items-center gap-1.5 h-8 px-2.5 text-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-[#e4c17a] ${
+                  qualityMode !== 'auto'
+                    ? 'text-[#f6e8c8] border-[#e4c17a]/45 bg-[#e4c17a]/10'
+                    : 'text-[#c9c5ba] border-white/12 hover:text-[#f6e8c8] hover:border-[#e4c17a]/45'
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span className="hidden sm:inline">{qualityButtonLabel}</span>
+                <span className="sm:hidden">{modeLabel}</span>
+              </button>
+
               <button
                 type="button"
                 onClick={onToggleCaptions}

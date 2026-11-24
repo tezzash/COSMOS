@@ -452,6 +452,14 @@ export class StellarNucleosynthesis {
     return this.totalSpawnedBursts;
   }
 
+  public setPixelRatio(pixelRatio: number): void {
+    for (const slot of this.slots) {
+      if (slot.particlesMat.uniforms.uPixelRatio) {
+        slot.particlesMat.uniforms.uPixelRatio.value = pixelRatio;
+      }
+    }
+  }
+
   public dispose(): void {
     this.disposables.forEach((d) => d.dispose());
   }

@@ -7,6 +7,7 @@ import {
   generateGalaxyBuffers,
   sanitizeGalaxyParams,
 } from '../proceduralGalaxy';
+import { type ShaderPrecision } from '../deviceProfile';
 import { type ParallaxInput, type ParallaxOptions, writeParallaxOffset } from '../parallax';
 
 const _parallaxTarget = new THREE.Vector3();
@@ -15,6 +16,7 @@ const _tmpColor = new THREE.Color();
 export const HERO_GALAXY_POSITION = new THREE.Vector3(0, 130, -40);
 
 const GALAXY_DISK_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   varying vec2 vUv;
   varying vec3 vLocalPos;
 
@@ -44,10 +46,11 @@ const GALAXY_DISK_FRAGMENT_SHADER = /* glsl */ `
 
   varying vec2 vUv;
 
+  // mediump-safe hash keeping intermediate values well within float16 dynamic range
   float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21) + uSeed * 0.0017);
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031 + uSeed * 0.0017);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
   }
 
   float vnoise(vec2 p) {
@@ -178,6 +181,7 @@ const GALAXY_DISK_FRAGMENT_SHADER = /* glsl */ `
 `;
 
 const GALAXY_STAR_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   attribute float aScale;
   attribute float aPhase;
   attribute vec3 aColor;
@@ -252,6 +256,7 @@ const GALAXY_STAR_FRAGMENT_SHADER = /* glsl */ `
 `;
 
 const GALAXY_NEBULA_VERTEX_SHADER = /* glsl */ `
+  precision highp float;
   attribute float aScale;
   attribute float aPhase;
   attribute vec3 aColor;
@@ -268,11 +273,13 @@ const GALAXY_NEBULA_VERTEX_SHADER = /* glsl */ `
   varying vec3 vColor;
   varying float vPhase;
   varying float vAlpha;
+  varying float vCloudRot;
 
   void main() {
     vColor = aColor;
     vPhase = aPhase;
     vAlpha = aOpacity * uOpacity;
+    vCloudRot = aPhase * 6.2831 + uTime * 0.025;
 
     vec3 pos = position;
     float omega = uSpinSpeed / (0.46 + aRadius * 1.25);
@@ -292,16 +299,15 @@ const GALAXY_NEBULA_VERTEX_SHADER = /* glsl */ `
 `;
 
 const GALAXY_NEBULA_FRAGMENT_SHADER = /* glsl */ `
-  uniform float uTime;
-
   varying vec3 vColor;
   varying float vPhase;
   varying float vAlpha;
+  varying float vCloudRot;
 
   float hash21(vec2 p) {
-    p = fract(p * vec2(127.1, 311.7));
-    p += dot(p, p + 19.19);
-    return fract(p.x * p.y);
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
   }
 
   float vnoise(vec2 p) {
@@ -320,9 +326,8 @@ const GALAXY_NEBULA_FRAGMENT_SHADER = /* glsl */ `
     float d = length(uv);
     if (d > 0.5 || vAlpha < 0.003) discard;
 
-    float rot = vPhase * 6.2831 + uTime * 0.025;
-    float ca = cos(rot);
-    float sa = sin(rot);
+    float ca = cos(vCloudRot);
+    float sa = sin(vCloudRot);
     vec2 ruv = mat2(ca, -sa, sa, ca) * uv;
 
     // 3-octave wispy FBM gas texture inside each volumetric cloud puff
@@ -369,6 +374,7 @@ export class ProceduralGalaxyInstance {
   private currentParams: GalaxyParams;
   private currentStarCount = 0;
   private currentNebulaCount = 0;
+  private shaderPrecision: ShaderPrecision;
 
   constructor(
     params: Partial<GalaxyParams>,
@@ -380,8 +386,10 @@ export class ProceduralGalaxyInstance {
       pixelRatio: number;
       depthFactor: number;
       spinSpeed: number;
+      shaderPrecision?: ShaderPrecision;
     },
   ) {
+    this.shaderPrecision = options.shaderPrecision ?? 'highp';
     this.baseStarCount = options.baseStarCount;
     this.baseNebulaCount = options.baseNebulaCount;
     this.depthFactor = options.depthFactor;
@@ -396,6 +404,7 @@ export class ProceduralGalaxyInstance {
     this.diskMat = new THREE.ShaderMaterial({
       vertexShader: GALAXY_DISK_VERTEX_SHADER,
       fragmentShader: GALAXY_DISK_FRAGMENT_SHADER,
+      precision: this.shaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -432,6 +441,7 @@ export class ProceduralGalaxyInstance {
     this.starMat = new THREE.ShaderMaterial({
       vertexShader: GALAXY_STAR_VERTEX_SHADER,
       fragmentShader: GALAXY_STAR_FRAGMENT_SHADER,
+      precision: this.shaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -452,6 +462,7 @@ export class ProceduralGalaxyInstance {
     this.nebulaMat = new THREE.ShaderMaterial({
       vertexShader: GALAXY_NEBULA_VERTEX_SHADER,
       fragmentShader: GALAXY_NEBULA_FRAGMENT_SHADER,
+      precision: this.shaderPrecision,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -536,12 +547,33 @@ export class ProceduralGalaxyInstance {
 
   public update(elapsed: number, opacity: number): void {
     const isEll = this.currentParams.type === 'elliptical';
-    if (this.diskMat.uniforms.uTime) this.diskMat.uniforms.uTime.value = elapsed;
+    const wrappedTime = elapsed % 600;
+    if (this.diskMat.uniforms.uTime) this.diskMat.uniforms.uTime.value = wrappedTime;
     if (this.diskMat.uniforms.uOpacity) this.diskMat.uniforms.uOpacity.value = opacity * (isEll ? 0.54 : 0.78);
-    if (this.starMat.uniforms.uTime) this.starMat.uniforms.uTime.value = elapsed;
+    if (this.starMat.uniforms.uTime) this.starMat.uniforms.uTime.value = wrappedTime;
     if (this.starMat.uniforms.uOpacity) this.starMat.uniforms.uOpacity.value = opacity * (isEll ? 0.78 : 0.96);
-    if (this.nebulaMat.uniforms.uTime) this.nebulaMat.uniforms.uTime.value = elapsed;
+    if (this.nebulaMat.uniforms.uTime) this.nebulaMat.uniforms.uTime.value = wrappedTime;
     if (this.nebulaMat.uniforms.uOpacity) this.nebulaMat.uniforms.uOpacity.value = opacity * (isEll ? 0.55 : 0.82);
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    if (this.starMat.uniforms.uPixelRatio) {
+      this.starMat.uniforms.uPixelRatio.value = pixelRatio;
+    }
+    if (this.nebulaMat.uniforms.uPixelRatio) {
+      this.nebulaMat.uniforms.uPixelRatio.value = pixelRatio;
+    }
+  }
+
+  public setShaderPrecision(precision: ShaderPrecision): void {
+    if (this.shaderPrecision === precision) return;
+    this.shaderPrecision = precision;
+    this.diskMat.precision = precision;
+    this.diskMat.needsUpdate = true;
+    this.starMat.precision = precision;
+    this.starMat.needsUpdate = true;
+    this.nebulaMat.precision = precision;
+    this.nebulaMat.needsUpdate = true;
   }
 
   public applyParallax(input: ParallaxInput, damp: number, options: ParallaxOptions): void {
@@ -590,7 +622,7 @@ export class ProceduralGalaxySystem {
   private heroFocusTarget = false;
   private heroParams: GalaxyParams;
 
-  constructor(isMobile: boolean, pixelRatio: number) {
+  constructor(isMobile: boolean, pixelRatio: number, shaderPrecision: ShaderPrecision = 'highp') {
     const scaleFactor = isMobile ? 0.6 : 1.0;
 
     // Curated 5-galaxy ensemble across the film corridor (distinct morphologies, cohesive palette)
@@ -721,6 +753,7 @@ export class ProceduralGalaxySystem {
         pixelRatio,
         depthFactor: spec.depth,
         spinSpeed: spec.spin,
+        shaderPrecision,
       });
       this.corridorGalaxies.push(inst);
       this.root.add(inst.root);
@@ -736,6 +769,7 @@ export class ProceduralGalaxySystem {
       pixelRatio,
       depthFactor: 0,
       spinSpeed: 0.068,
+      shaderPrecision: 'highp',
     });
     this.heroGalaxy.root.visible = false;
     this.root.add(this.heroGalaxy.root);
@@ -832,6 +866,19 @@ export class ProceduralGalaxySystem {
   public applyParallax(input: ParallaxInput, damp: number, options: ParallaxOptions): void {
     for (const g of this.corridorGalaxies) {
       g.applyParallax(input, damp, options);
+    }
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    for (const g of this.corridorGalaxies) {
+      g.setPixelRatio(pixelRatio);
+    }
+    this.heroGalaxy.setPixelRatio(pixelRatio);
+  }
+
+  public setShaderPrecision(precision: ShaderPrecision): void {
+    for (const g of this.corridorGalaxies) {
+      g.setShaderPrecision(precision);
     }
   }
 
